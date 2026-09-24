@@ -42,7 +42,6 @@ RCP_LN2 = 1.0 / math.log(2.0)
 GATE_C = -2.5 * RCP_LN2
 EPS = 1e-6
 MAX_ITEMS = 160
-MAX_SEQS = 64
 
 
 # split schedule: per-sequence-start cost (BETA) and cut snap distance (SNAP), in chunks
@@ -108,9 +107,14 @@ def build_kernel(
     prep_regs=112,
     intra_unroll=False,
     bf16_handoff=False,
+    max_items=MAX_ITEMS,
 ):
-    """Persistent CTAs, each walking its host-built item list (see _host_item_table)."""
+    """Persistent CTAs, each walking its host-built item list (see _host_item_table).
+
+    Item lists up to MAX_ITEMS long are staged in SMEM; longer ones (long sequences on few
+    (sequence, head) units) are read from global memory in place."""
     assert H % 8 == 0
+    global_items = max_items > MAX_ITEMS
 
     def kda_fwd(q_map, k_map, v_map, g_map, beta_map, o_map, out, A_log, dt_bias, h0, final_state, hand, flags, items, item_counts, num_ctas, scale):
         cta = txl.cta_id()
@@ -120,7 +124,7 @@ def build_kernel(
 
         smem = txl.smem_pool()
         tmem_addr = smem.alloc((1,), txl.u32)
-        item_tbl = smem.alloc((2 * MAX_ITEMS,), txl.u32, align=16)
+        item_tbl = smem.alloc((2 * min(max_items, MAX_ITEMS),), txl.u32, align=16)
         item_meta = smem.alloc((4,), txl.u32, align=16)
         adt_s = smem.alloc((128 + 4,), txl.f32, align=16)
         rsq = smem.alloc((2 * 4 * 64,), txl.f32, align=16)
@@ -194,12 +198,13 @@ def build_kernel(
         with txl.If(warp == 0), txl.Then():
             cnt = txl.local_scalar("int32")
             txl.ptx.ld.global_.s32(cnt, item_counts.ptr_to([cta]))
-            with txl.serial(2 * MAX_ITEMS // 32) as it_:
-                wi = it_ * 32 + lane
-                with txl.If(wi < 2 * cnt), txl.Then():
-                    wv = txl.local_scalar("uint32")
-                    txl.ptx.ld.global_.u32(wv, items.ptr_to([cta * (2 * MAX_ITEMS) + wi]))
-                    txl.ptx.st.shared.u32(item_tbl.ptr_to([wi]), wv)
+            if not global_items:
+                with txl.serial(2 * max_items // 32) as it_:
+                    wi = it_ * 32 + lane
+                    with txl.If(wi < 2 * cnt), txl.Then():
+                        wv = txl.local_scalar("uint32")
+                        txl.ptx.ld.global_.u32(wv, items.ptr_to([cta * (2 * max_items) + wi]))
+                        txl.ptx.st.shared.u32(item_tbl.ptr_to([wi]), wv)
             with txl.If(lane == 0), txl.Then():
                 txl.ptx.st.shared.u32(item_meta.ptr_to([0]), txl.Cast("uint32", cnt))
             # the item table aliases nothing, but the ring tiles are filled by TMA (async proxy) right after
@@ -222,16 +227,24 @@ def build_kernel(
 
         def item_word(idx):
             w = txl.local_scalar("uint32")
-            txl.ptx.ld.shared.u32(w, item_tbl.ptr_to([2 * idx]))
+            if global_items:
+                txl.ptx.ld.global_.u32(w, items.ptr_to([cta * (2 * max_items) + 2 * idx]))
+            else:
+                txl.ptx.ld.shared.u32(w, item_tbl.ptr_to([2 * idx]))
             return w
 
         def item_word1(idx):
             w = txl.local_scalar("uint32")
-            txl.ptx.ld.shared.u32(w, item_tbl.ptr_to([2 * idx + 1]))
+            if global_items:
+                txl.ptx.ld.global_.u32(w, items.ptr_to([cta * (2 * max_items) + 2 * idx + 1]))
+            else:
+                txl.ptx.ld.shared.u32(w, item_tbl.ptr_to([2 * idx + 1]))
             return w
 
         def item_tok0(w):
-            return txl.Cast("int32", txl.bitwise_and(w, txl.uint32(0xFFFF)))
+            lo = txl.bitwise_and(w, txl.uint32(0xFFFF))
+            hi = txl.shift_left(txl.bitwise_and(txl.shift_right(w, txl.uint32(23)), txl.uint32(0x1F)), txl.uint32(16))
+            return txl.Cast("int32", txl.bitwise_or(lo, hi))
 
         def item_nvalid(w):
             return txl.Cast("int32", txl.bitwise_and(txl.shift_right(w, txl.uint32(16)), txl.uint32(0x7F)))
@@ -1709,6 +1722,10 @@ def _encode_beta_map(tensor, T, H):
 _KERNELS = {}
 
 
+def _tok_bits(tok0):
+    return (tok0 & 0xFFFF) | ((tok0 >> 16) << 23)
+
+
 def _host_item_table(cu_list, H, num_ctas, force_lpt):
     """Per-CTA (word0, word1) item lists.
 
@@ -1716,7 +1733,7 @@ def _host_item_table(cu_list, H, num_ctas, force_lpt):
     the (head, sequence, chunk) walk is cut into num_ctas equal-cost ranges (chunk cost 1, BETA per sequence
     start, cuts snapped to a sequence end within SNAP chunks; a range starting inside a sequence continues
     the state handed off by the previous CTA); otherwise whole (sequence, head) items go to the least loaded
-    CTA group (LPT).  word0 = tok0 | nvalid << 16 | dst_hand << 28 | src_hand << 29 | first << 30 | last << 31,
+    CTA group (LPT).  word0 = tok0[15:0] | nvalid << 16 | tok0[20:16] << 23 | dst_hand << 28 | src_hand << 29 | first << 30 | last << 31,
     word1 = seq | head << 16."""
     nseq = len(cu_list) - 1
     start = [int(cu_list[n]) for n in range(nseq)]
@@ -1761,7 +1778,7 @@ def _host_item_table(cu_list, H, num_ctas, force_lpt):
                             for ch in range(cb, ce):
                                 tok0 = s_tok + ch * BT
                                 nvalid = max(min(e_tok - tok0, BT), 0)
-                                word0 = (tok0 | (nvalid << 16) | ((1 << 30) if ch == cb else 0) | ((1 << 31) if ch + 1 == ce else 0)
+                                word0 = (_tok_bits(tok0) | (nvalid << 16) | ((1 << 30) if ch == cb else 0) | ((1 << 31) if ch + 1 == ce else 0)
                                          | ((1 << 29) if (ch == cb and cont_in) else 0) | ((1 << 28) if (ch + 1 == ce and head_out) else 0))
                                 items[cta].append((word0 & 0xFFFFFFFF, n | (hh << 16)))
     else:
@@ -1784,7 +1801,7 @@ def _host_item_table(cu_list, H, num_ctas, force_lpt):
                 for ch in range(nch[r]):
                     tok0 = s_tok + ch * BT
                     nvalid = max(min(s_tok + ln - tok0, BT), 0)
-                    word0 = tok0 | (nvalid << 16) | ((1 << 30) if ch == 0 else 0) | ((1 << 31) if ch + 1 == nch[r] else 0)
+                    word0 = _tok_bits(tok0) | (nvalid << 16) | ((1 << 30) if ch == 0 else 0) | ((1 << 31) if ch + 1 == nch[r] else 0)
                     items[cta].append((word0 & 0xFFFFFFFF, n | (hh << 16)))
     return items
 
@@ -1889,10 +1906,10 @@ def _balance_units(per, load, nch, start_cost, max_rounds=400):
             load[c] += ucost(u[0]) - ucost(v[0])
 
 
-def _get_kernel(H, intra_unroll, bf16_handoff, force_lpt):
-    key = (H, intra_unroll, bf16_handoff, force_lpt)
+def _get_kernel(H, intra_unroll, bf16_handoff, force_lpt, max_items=MAX_ITEMS):
+    key = (H, intra_unroll, bf16_handoff, force_lpt, max_items)
     if key not in _KERNELS:
-        kernel = build_kernel(H, intra_unroll=intra_unroll, bf16_handoff=bf16_handoff)
+        kernel = build_kernel(H, intra_unroll=intra_unroll, bf16_handoff=bf16_handoff, max_items=max_items)
         target = tvm.target.Target({"kind": "cuda", "arch": "sm_100a"})
         with target:
             _KERNELS[key] = tvm.compile(kernel.mod, target=target, tir_pipeline="tirx")
@@ -1912,15 +1929,15 @@ def fused_setup(data, B, T, H):
         cu = torch.tensor([0, T], dtype=torch.int64, device=q.device)
     cu = cu.to(device=q.device, dtype=torch.int64).contiguous()
     nseq = int(cu.numel()) - 1
-    assert 1 <= nseq < MAX_SEQS
+    assert 1 <= nseq < 65536
     assert h0.shape == (nseq, H, D, D) and h0.dtype == torch.float32
     assert final_state.shape == (nseq, H, D, D) and final_state.dtype == torch.float32
     assert out.shape == (1, T, H, D) and out.dtype == torch.bfloat16
 
-    assert T < 65536 and (T + BT - 1) // BT + nseq <= MAX_ITEMS
+    # token offsets are packed into 21 bits of the item word; element offsets are int32
+    assert T < (1 << 21) and T * H * D < (1 << 31)
     sm_count = torch.cuda.get_device_properties(q.device).multi_processor_count
     num_ctas = max(1, min(sm_count, H * nseq))
-    assert (H * ((T + BT - 1) // BT + (1 + BETA) * nseq) + num_ctas - 1) // num_ctas + SNAP <= MAX_ITEMS
 
     force_lpt = H == 96 and nseq == 6
     bf16_handoff = H == 64 and nseq in (6, 8)
@@ -1928,8 +1945,9 @@ def fused_setup(data, B, T, H):
     hand = torch.empty(sm_count * D * D, dtype=hand_dtype, device=q.device)
     flags = torch.zeros(sm_count + 1, dtype=torch.int32, device=q.device)
     lists = _host_item_table(cu.tolist(), H, num_ctas, force_lpt)
-    assert max(len(x) for x in lists) <= MAX_ITEMS
-    items_np = torch.zeros(num_ctas, MAX_ITEMS, 2, dtype=torch.int64)
+    # the per-CTA item table lives in SMEM; schedules longer than the default table get a larger one
+    max_items = max(MAX_ITEMS, -(-max(len(x) for x in lists) // 32) * 32)
+    items_np = torch.zeros(num_ctas, max_items, 2, dtype=torch.int64)
     for c_, lst in enumerate(lists):
         if lst:
             items_np[c_, : len(lst)] = torch.tensor(lst, dtype=torch.int64)
@@ -1938,7 +1956,7 @@ def fused_setup(data, B, T, H):
     item_counts = torch.tensor([len(x) for x in lists], dtype=torch.int32, device=q.device)
 
     intra_unroll = H == 64 and nseq == 1
-    ex = _get_kernel(H, intra_unroll, bf16_handoff, force_lpt)
+    ex = _get_kernel(H, intra_unroll, bf16_handoff, force_lpt, max_items)
     maps = [_encode_map(t, T, H, rows=32, slabs=1) for t in (q, k)] + [_encode_map(t, T, H) for t in (v, g)] + [_encode_beta_map(beta, T, H), _encode_map(out, T, H, rows=32)]
     a_log = A_log.contiguous()
     dt_flat = dt_bias.reshape(-1)

@@ -9,8 +9,8 @@ both following the KDA-internal `kda_forward` task ABI:
 
 | directory | language | entry point | source |
 |---|---|---|---|
-| `cute/` | CuTe DSL (Python) | `cute/kernel.py` (`run`) | humanfia/kda-for-kda `yahui-2.88x-cute` @ `dde00d0`, with two fixes (see below) |
-| `tirx/` | TIRx (TVM) | `tirx/kernel.py` (`prepare` / `run`) | humanfia/kda-tirx `20260922-b300-tune` @ `def3dfc` (judge submission `2b64c874`), unchanged |
+| `cute/` | CuTe DSL (Python) | `cute/kernel.py` (`run`) | humanfia/kda-for-kda `yahui-2.88x-cute` @ `dde00d0`, with three fixes (see below) |
+| `tirx/` | TIRx (TVM) | `tirx/kernel.py` (`prepare` / `run`) | humanfia/kda-tirx `20260922-b300-tune` @ `def3dfc` (judge submission `2b64c874`), with its size limits lifted (see below) |
 
 Inputs: bf16 `q/k/v/g [1, T, H, 128]`, bf16 beta logits `[1, T, H]`, fp32 `A_log [H]`,
 fp32 `dt_bias [H*128]`, fp32 `initial_state [N, H, 128, 128]`, int64 `cu_seqlens [N+1]` or `None`.
@@ -23,19 +23,32 @@ FlashKDA 7afb9f4's fused CUTLASS forward, executed live on every workload; 8192 
 
 | workload | CuTe | TIRx |
 |---|---:|---:|
-| H96 fixed (1 x 8192) | 2.760x | 3.108x |
-| H96 mixed varlen (6 seqs) | 3.244x | 3.030x |
-| H96 uniform varlen (8 x 1024) | 2.582x | 2.466x |
-| H64 fixed (1 x 8192) | 2.512x | 3.611x |
-| H64 mixed varlen (6 seqs) | 3.528x | 3.285x |
-| H64 uniform varlen (8 x 1024) | 2.544x | 2.425x |
-| **geomean** | **2.837x** | **2.957x** |
+| H96 fixed (1 x 8192) | 2.760x | 3.102x |
+| H96 mixed varlen (6 seqs) | 3.000x | 3.038x |
+| H96 uniform varlen (8 x 1024) | 2.583x | 2.463x |
+| H64 fixed (1 x 8192) | 2.513x | 3.601x |
+| H64 mixed varlen (6 seqs) | 3.421x | 3.265x |
+| H64 uniform varlen (8 x 1024) | 2.542x | 2.412x |
+| **geomean** | **2.786x** | **2.950x** |
 | judge correctness (workloads, stress / exact probes, holdout, 5 real probes) | 24/24 | 24/24 |
+
+### Accuracy on a real long prefill
+
+![Output and final-state relative RMSE of FlashKDA, CuTe and TIRx on a real Kimi-Linear prefill](figures/real_workload_accuracy.png)
+
+A MATH-500 prompt prefilled through Kimi-Linear-48B-A3B-Instruct (8183 tokens, 96 heads),
+scored against an fp64 token-by-token recurrence with FlashKDA's own test metric, relative
+RMSE. FlashKDA's error grows with context length and its final state ends at 3.45% off;
+both kernels here stay flat and keep the final state within 0.3%.
+(`scripts/real_workload_error_plots.py`, data in `figures/real_workload_error.json`.)
 
 ## CuTe: changes from the source branch
 
 - The per-chunk cumulative log-decay table is always kept in FP32 (the FP16 storage path
   `GCS_FP16_` / `GCS_PACKCVT_` and the unused M64 kernel `pkdx.py` are removed).
+- The q/k normalization and decay decoration are computed in FP32 and rounded to BF16 once
+  on every route (the packed-BF16 variant used when a sequence length is not a multiple of
+  32 is removed).
 - The split-sequence state handoff clears its flags on the launch stream before every launch,
   so eager calls, CUDA graph captures and replays can be mixed in any order.
 
@@ -47,6 +60,13 @@ two-kernel split-concurrent route for single sequences, derived from the tirx-ke
 2.544x). `kernel.py` wraps the gist's `setup(data, B, T, H) -> run` protocol as
 `prepare(...) -> launch`; `prepare` compiles, builds the host work list from `cu_seqlens`,
 and records a private CUDA graph, and `launch` replays it on the current buffer contents.
+
+Changes from the source branch (work-list handling only; the numerics and the timed-workload
+speed are unchanged):
+
+- The packed-varlen route no longer refuses large batches. Per-CTA work lists longer than
+  the 160-entry SMEM table are read from global memory, the sequence-count cap is removed,
+  and token offsets are packed into 21 bits instead of 16.
 
 ## Environment
 
@@ -114,7 +134,7 @@ set above), checks both outputs against FLA's Triton `chunk_kda` with the task's
 tolerance, and reports each workload's FlashKDA and kernel times and the geomean speedup.
 It follows the task's timing protocol (CUPTI, cold L2, CUDA graph, median of 30 iterations
 x 3 trials), with the task's input distributions and fixed seeds. On the B300 above it
-reports 2.849x (CuTe) and 2.965x (TIRx), within 0.5% of the judge's geomeans.
+reports 2.799x (CuTe) and 2.963x (TIRx), within 0.5% of the judge's geomeans.
 
 A kernel passed by path must expose `run(...)` with the signature above and may expose
 `prepare(...) -> launch`, which is then planned once per workload and only `launch()` is
@@ -122,9 +142,9 @@ timed.
 
 ## Supported inputs
 
-Head size 128, bf16 activations and an fp32 state; tested with H = 32, 64 and 96. The TIRx
-kernel handles packed batches with `ceil(T / 64) + num_seqs <= 160`, fewer than 64 sequences
-and `T < 65536`; single sequences with `T % 32 == 0` are not bound by the first limit.
+Head size 128, bf16 activations and an fp32 state; tested with H = 32, 64 and 96, up to
+170001 tokens in one sequence and 300 packed sequences. TIRx requires `H % 8 == 0` and
+`T * H * 128 < 2^31`.
 
 ## Hacking example
 

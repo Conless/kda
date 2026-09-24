@@ -2299,20 +2299,10 @@ def _pkd(
                         cute.autovec_copy(g8s, g8)
                         gv8 = g8.load()
                         decv = cute.math.exp2(gv8 - anch, fastmath=True)
-                        if cutlass.const_expr(FULL_CHUNKS_ == 0):
-                            # These products are immediately consumed as BF16
-                            # MMA operands. Round their factors at that existing
-                            # boundary so Blackwell can use packed arithmetic.
-                            khb = kr.load() * rkn.to(cutlass.BFloat16)
-                            decb = decv.to(cutlass.BFloat16)
-                            qdb = decb * rqn.to(cutlass.BFloat16)
-                            qr.store(qr.load() * qdb)
-                            kr.store(khb * decb)
-                        else:
-                            qhv = qr.load().to(cutlass.Float32) * rqn
-                            khv = kr.load().to(cutlass.Float32) * rkn
-                            qr.store((qhv * decv).to(cutlass.BFloat16))
-                            kr.store((khv * decv).to(cutlass.BFloat16))
+                        qhv = qr.load().to(cutlass.Float32) * rqn
+                        khv = kr.load().to(cutlass.Float32) * rkn
+                        qr.store((qhv * decv).to(cutlass.BFloat16))
+                        kr.store((khv * decv).to(cutlass.BFloat16))
                         if cutlass.const_expr(RCP_DECOR_ == 1):
                             # The inverse decoration is exactly reciprocal to the
                             # forward decay.  Its consumer is rounded to BF16, so
@@ -2327,10 +2317,7 @@ def _pkd(
                         cute.autovec_copy(qr, dq8)
                         dk8 = v_kd8[(rw2, None, sg2 & 7, sg2 >> 3, inst)]
                         cute.autovec_copy(kr, dk8)
-                        if cutlass.const_expr(FULL_CHUNKS_ == 0):
-                            kr.store(khb * idecv.to(cutlass.BFloat16))
-                        else:
-                            kr.store((khv * idecv).to(cutlass.BFloat16))
+                        kr.store((khv * idecv).to(cutlass.BFloat16))
                         di8 = v_ki8[(rw2, None, sg2 & 7, sg2 >> 3, inst)]
                         cute.autovec_copy(kr, di8)
                     # gt/rf (dedicated buffers; gcs row 31 stable since the

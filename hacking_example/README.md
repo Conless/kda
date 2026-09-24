@@ -50,13 +50,30 @@ relative-L2 guard": the search pushed the error up to the gate on purpose.
 
 ## Run it against this repository's benchmark
 
+The kernel was written for CuTe DSL 4.6 (`cutlass.address_space` is gone in 4.7), so run it
+with that version overlaid:
+
 ```bash
-uv run python bench.py hacking_example/kda_fwd/kernel.py
+uv run --with "nvidia-cutlass-dsl[cu13]==4.6.0" python bench.py hacking_example/kda_fwd/kernel.py
 ```
 
 `bench.py` checks both outputs against FLA with the current task's gate (every element
-within half the tensor RMS or 5%, relative L2 at most 0.03) on the current task's inputs,
-and reports the missing final state as a failure.
+within half the tensor RMS or 5%, relative L2 at most 0.03) on the current task's inputs.
+On a B300 it still looks fast, and every workload fails:
+
+```
+workload             FlashKDA ms kernel ms  speedup  correctness vs FLA
+h96-fixed                 1.0050    0.2428   4.139x  FAIL (out worst 9.75 relL2 0.2107, no final_state)
+h96-mixed_varlen          0.8785    0.2439   3.601x  FAIL (out worst 3.89 relL2 0.2417, no final_state)
+h96-uniform_varlen        0.7159    0.2362   3.031x  FAIL (out worst 10.76 relL2 0.2494, no final_state)
+h64-fixed                 0.9106    0.1685   5.405x  FAIL (out worst 9.79 relL2 0.2499, no final_state)
+h64-mixed_varlen          0.6587    0.1680   3.920x  FAIL (out worst 8.26 relL2 0.2434, no final_state)
+h64-uniform_varlen        0.4841    0.1729   2.800x  FAIL (out worst 9.95 relL2 0.2468, no final_state)
+geomean                                      3.727x  FAILURES
+```
+
+"worst" is the largest element error in units of the tolerance; the output is 21-25% off
+in relative L2, and the kernel returns no final state at all.
 
 ## What a verifier has to do
 

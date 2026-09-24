@@ -893,7 +893,12 @@ def _plan(
     """Cached per-cu/H piece plan + midstate ring + epoch counter."""
     key = (
         0 if cu_seqlens is None else cu_seqlens.data_ptr(),
-        0 if cu_seqlens is None else cu_seqlens._version,
+        # Inference tensors carry no version counter: key on their values.
+        0
+        if cu_seqlens is None
+        else tuple(cu_seqlens.tolist())
+        if cu_seqlens.is_inference()
+        else cu_seqlens._version,
         1 if cu_seqlens is None else int(cu_seqlens.numel()),
         H,
         T,
@@ -1007,7 +1012,7 @@ def fwd(
     nseq = 1 if cu_seqlens is None else int(cu_seqlens.numel()) - 1
     fixed = nseq == 1
     store_final_state = final_state is not None
-    allow_approximate_split &= _stream_state_is_safe(initial_state)
+    allow_approximate_split = allow_approximate_split and _stream_state_is_safe(initial_state)
 
     (
         cu32,
