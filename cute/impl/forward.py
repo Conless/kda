@@ -1025,6 +1025,14 @@ def fwd(
         full_chunks,
     ) = _plan(cu_seqlens, H, T, dev, allow_approximate_split, store_final_state)
     ep[0] += 1
+    # Split handoff flags count the producer's 256 releases.  Clear them on the
+    # launch stream before every launch (a CUDA graph records the clear with the
+    # kernel) and wait for one launch's worth, so eager calls, graph captures and
+    # replays in any order all wait for this launch's producer.
+    fepoch = ep[0]
+    if has_split and not allow_approximate_split:
+        mfl.zero_()
+        fepoch = 1
     # v98 fused-gate kernel variant: routed to single-sequence (fixed)
     # shapes only — it wins ~1-3% there (long chains, steady-state L1
     # relief) but costs ~2% on short varlen chains (prep-latency exposure
@@ -1033,7 +1041,7 @@ def fwd(
         "initial_state": initial_state,
         "final_state": final_state,
         "cu_seqlens": cu32,
-        "sched": (soff, schain, spt0, sptn, ssrc, sdst, G, mid, mfl, ep[0]),
+        "sched": (soff, schain, spt0, sptn, ssrc, sdst, G, mid, mfl, fepoch),
         "gate2": 1 if fixed else 0,
     }
     # NCU v119 source counters identify the prep warpgroup's raw-Q/K indexing

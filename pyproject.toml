@@ -1,0 +1,51 @@
+[project]
+name = "kda-for-kda-release"
+version = "0.1.0"
+description = "CuTe DSL and TIRx KDA forward kernels for NVIDIA Blackwell, with a FlashKDA speedup benchmark"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch==2.12.1",
+    "numpy",
+    "einops",
+    "ninja",
+    # CuTe DSL kernel
+    "nvidia-cutlass-dsl[cu13]==4.7.0",
+    "cuda-python>=13,<14",
+    # TIRx kernel: TVM with TIRx, its matching FFI, and the tirx_lite frontend
+    "apache-tvm",
+    "apache-tvm-ffi",
+    "tirx-kernels",
+    # Benchmark: FlashKDA baseline (through FLA), FLA reference, CUPTI timer
+    "fla-core==0.5.2",
+    "flash-kda",
+    "flashinfer-python==0.6.13",
+    "cupti-python==13.0.1",
+]
+
+[tool.uv]
+package = false
+no-build-isolation-package = ["flash-kda"]
+
+[tool.uv.extra-build-dependencies]
+flash-kda = [{ requirement = "torch", match-runtime = true }, "setuptools", "ninja"]
+
+[tool.uv.config-settings-package]
+apache-tvm = { "cmake.define.USE_CUDA" = "ON", "cmake.define.USE_LLVM" = "llvm-config-18" }
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+flash-kda = { git = "https://github.com/MoonshotAI/FlashKDA.git", rev = "7afb9f454f160a6c4bbc0999beca0a8c40a38934" }
+apache-tvm = { git = "https://github.com/apache/tvm.git", rev = "ed5e2fed3f32030d9407e72751550b26653c5fac" }
+apache-tvm-ffi = { git = "https://github.com/apache/tvm-ffi.git", rev = "be35ec1297d6ddf388b7feb4f2e89d2cf030dda8" }
+tirx-kernels = { git = "https://github.com/mlc-ai/tirx-kernels.git", rev = "65d9a075a589e17b519d70f22c664a715dcc1ffa" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+# FlashKDA's setup.py imports torch, so its metadata is declared statically.
+[[tool.uv.dependency-metadata]]
+name = "flash-kda"
+version = "0.0.1+7afb9f4"
+requires-dist = []

@@ -9,7 +9,7 @@ both following the KDA-internal `kda_forward` task ABI:
 
 | directory | language | entry point | source |
 |---|---|---|---|
-| `cute/` | CuTe DSL (Python) | `cute/kernel.py` (`run`) | humanfia/kda-for-kda `yahui-2.88x-cute` @ `dde00d0`, with the FP16 gate table removed (see below) |
+| `cute/` | CuTe DSL (Python) | `cute/kernel.py` (`run`) | humanfia/kda-for-kda `yahui-2.88x-cute` @ `dde00d0`, with two fixes (see below) |
 | `tirx/` | TIRx (TVM) | `tirx/kernel.py` (`prepare` / `run`) | humanfia/kda-tirx `20260922-b300-tune` @ `def3dfc` (judge submission `2b64c874`), unchanged |
 
 Inputs: bf16 `q/k/v/g [1, T, H, 128]`, bf16 beta logits `[1, T, H]`, fp32 `A_log [H]`,
@@ -23,38 +23,21 @@ FlashKDA 7afb9f4's fused CUTLASS forward, executed live on every workload; 8192 
 
 | workload | CuTe | TIRx |
 |---|---:|---:|
-| H96 fixed (1 x 8192) | 2.761x | 3.108x |
-| H96 mixed varlen (6 seqs) | 3.241x | 3.030x |
-| H96 uniform varlen (8 x 1024) | 2.594x | 2.466x |
-| H64 fixed (1 x 8192) | 2.514x | 3.611x |
-| H64 mixed varlen (6 seqs) | 3.554x | 3.285x |
-| H64 uniform varlen (8 x 1024) | 2.558x | 2.425x |
-| **geomean** | **2.845x** | **2.957x** |
+| H96 fixed (1 x 8192) | 2.760x | 3.108x |
+| H96 mixed varlen (6 seqs) | 3.244x | 3.030x |
+| H96 uniform varlen (8 x 1024) | 2.582x | 2.466x |
+| H64 fixed (1 x 8192) | 2.512x | 3.611x |
+| H64 mixed varlen (6 seqs) | 3.528x | 3.285x |
+| H64 uniform varlen (8 x 1024) | 2.544x | 2.425x |
+| **geomean** | **2.837x** | **2.957x** |
 | judge correctness (workloads, stress / exact probes, holdout, 5 real probes) | 24/24 | 24/24 |
-
-Real-workload accuracy: 151 cases built from Kimi-Linear-48B-A3B-Instruct prefill captures
-(GSM8K / MATH-500; all 20 captured layers; H = 32 / 64 / 96; captured lengths, lengths cut to
-multiples of 64, tails started from a real recurrent state, 6- and 8-sequence packs, packs of
-up to 12277 tokens and 72 sequences), judged with the task's tolerance against an fp64
-token-by-token recurrence. FLA `chunk_kda` passes all 151.
-
-| | CuTe | TIRx |
-|---|---|---|
-| pass | 144 | 139 |
-| fail | 7, each one final-state element over tolerance (measured worst 1.01-1.29x); rel L2 <= 0.005 | 4, each one element over tolerance (1.02-1.20x); rel L2 <= 0.006 |
-| refused | 0 | 8 (see limitations) |
 
 ## CuTe: changes from the source branch
 
-The source branch stored the per-chunk cumulative log-decay table in shared memory as FP16
-whenever every sequence length is a multiple of 32 (`gcs_fp16=full_chunks`). That table spans
-0 to -230.8 bits (5 nats/token x 32 tokens), where FP16 spacing reaches 0.125 bits, so
-intra-chunk decay factors and the chunk-end state decay are off by up to ~9% under the deep
-gates of real models. It passed the synthetic workloads but failed 23 of the 24
-aligned-length real cases (worst element up to 3.5x tolerance). This release removes the
-FP16 storage path (`GCS_FP16_`, `GCS_PACKCVT_`) so the table is always FP32, and removes the
-unused M64 kernel (`pkdx.py`), which also used an FP16 table. Cost: geomean 2.903x -> 2.845x;
-real-workload passes 119 -> 144 of 151. Nothing else changed.
+- The per-chunk cumulative log-decay table is always kept in FP32 (the FP16 storage path
+  `GCS_FP16_` / `GCS_PACKCVT_` and the unused M64 kernel `pkdx.py` are removed).
+- The split-sequence state handoff clears its flags on the launch stream before every launch,
+  so eager calls, CUDA graph captures and replays can be mixed in any order.
 
 ## TIRx: provenance
 
@@ -67,23 +50,89 @@ and records a private CUDA graph, and `launch` replays it on the current buffer 
 
 ## Environment
 
-- CuTe: Python 3.12, CUDA 13.2, torch 2.12.1+cu130, `nvidia-cutlass-dsl` **4.7.0**
-  (KDA-internal image `kda-runtime:gpu` with the 4.7.0 CuTe DSL wheels).
-- TIRx: the KDA-internal image `kda-runtime:tirx-kdafwd` (TVM ed5e2fed3); `kernel.py`
-  retargets the gist's `sm_100a` to the running device's architecture.
+Both kernels, the FlashKDA baseline and the benchmark share one uv environment, pinned in
+`pyproject.toml` / `uv.lock`:
 
-Both target Blackwell; all numbers above were measured on a B300 (sm_103a). To judge one with KDA-internal, submit the
-directory's contents as the task's `solution/` (entry point `solution/kernel.py`).
+| component | version | used by |
+|---|---|---|
+| Python | 3.12 | all |
+| torch | 2.12.1+cu130 | all |
+| nvidia-cutlass-dsl (CuTe DSL) | 4.7.0 | CuTe kernel |
+| apache-tvm (with TIRx), apache-tvm-ffi, tirx-kernels | git ed5e2fed3, be35ec1, 65d9a075 | TIRx kernel |
+| flash-kda (FlashKDA) | git 7afb9f4 | baseline |
+| fla-core | 0.5.2 | baseline wrapper, correctness reference |
+| flashinfer-python, cupti-python | 0.6.13, 13.0.1 | CUPTI timer |
 
-## Known limitations
+TVM and FlashKDA are compiled from source during `uv sync`; everything else installs as
+wheels.
 
-- TIRx asserts, rather than computes, when a packed batch exceeds its work-list capacity:
-  `ceil(T / 64) + num_seqs <= 160` (varlen, or a single sequence whose length is not a
-  multiple of 32), `num_seqs < 64`, and `T < 65536`. Single sequences with `T % 32 == 0`
-  take the split route instead (verified at 12256 tokens).
-- TIRx bakes `cu_seqlens` into its work list at `prepare`; a new layout needs a new `prepare`.
-- CuTe plans its schedule on the host per `cu_seqlens` layout (cached per tensor); a new
-  layout costs up to about a second of host time on the first call.
+### Prerequisites
+
+- An NVIDIA Blackwell GPU (sm_100a / sm_103a) with a driver for CUDA 13.
+- The CUDA 13 toolkit (`nvcc`); FlashKDA's CUTLASS extension is built with it.
+- A C++17 compiler, CMake >= 3.18, and the LLVM 18 development files TVM needs for host
+  code generation.
+- [uv](https://docs.astral.sh/uv/) >= 0.8.
+
+On Ubuntu 24.04:
+
+```bash
+sudo apt-get install build-essential cmake llvm-18-dev libxml2-dev zlib1g-dev libzstd-dev
+curl -LsSf https://astral.sh/uv/install.sh | sh   # if uv is not installed
+```
+
+### Install
+
+```bash
+export CUDA_HOME=/usr/local/cuda PATH=/usr/local/cuda/bin:$PATH
+uv sync
+```
+
+The first `uv sync` compiles TVM and FlashKDA from source (30-60 minutes); later syncs reuse uv's
+cache. Notes:
+
+- FlashKDA builds for the GPU it sees. On a build host without a GPU, set
+  `FLASH_KDA_CUDA_ARCHS` (for example `103a` for B300, `100a` for B200) before `uv sync`.
+- TVM finds LLVM through `llvm-config-18` (set in `[tool.uv.config-settings-package]` in
+  `pyproject.toml`). If your LLVM 18 `llvm-config` has another name or path, change it
+  there and run `uv sync --reinstall-package apache-tvm`.
+
+### Check
+
+```bash
+uv run python -c "import cutlass, tvm, tirx_kernels.tirx_lite, flash_kda, fla; print('ok', cutlass.__version__, tvm.__version__)"
+```
+
+## Benchmark
+
+```bash
+uv run python bench.py cute    # or: tirx, or a path to another kernel.py
+```
+
+`bench.py` runs the six timed workloads of the KDA-internal `kda_forward` task (the Int21
+set above), checks both outputs against FLA's Triton `chunk_kda` with the task's
+tolerance, and reports each workload's FlashKDA and kernel times and the geomean speedup.
+It follows the task's timing protocol (CUPTI, cold L2, CUDA graph, median of 30 iterations
+x 3 trials), with the task's input distributions and fixed seeds. On the B300 above it
+reports 2.849x (CuTe) and 2.965x (TIRx), within 0.5% of the judge's geomeans.
+
+A kernel passed by path must expose `run(...)` with the signature above and may expose
+`prepare(...) -> launch`, which is then planned once per workload and only `launch()` is
+timed.
+
+## Supported inputs
+
+Head size 128, bf16 activations and an fp32 state; tested with H = 32, 64 and 96. The TIRx
+kernel handles packed batches with `ceil(T / 64) + num_seqs <= 160`, fewer than 64 sequences
+and `T < 65536`; single sequences with `T % 32 == 0` are not bound by the first limit.
+
+## Hacking example
+
+[`hacking_example/`](hacking_example/) keeps a disqualified forward kernel that a
+multi-agent optimization run produced against a loose verifier: it claimed 3.74x over
+FlashKDA by replacing the q/k norms with a distribution constant, dropping initial-state
+channels, skipping the cross-CTA state handoff and the intra-chunk solve. Its README
+documents each cheat and what a verifier needs to catch them. Do not use it.
 
 ## License
 
