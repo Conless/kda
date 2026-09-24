@@ -84,3 +84,7 @@ directory's contents as the task's `solution/` (entry point `solution/kernel.py`
 - TIRx bakes `cu_seqlens` into its work list at `prepare`; a new layout needs a new `prepare`.
 - CuTe plans its schedule on the host per `cu_seqlens` layout (cached per tensor); a new
   layout costs up to about a second of host time on the first call.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
