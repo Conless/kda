@@ -36,11 +36,33 @@ FlashKDA 7afb9f4's fused CUTLASS forward, executed live on every workload; 8192 
 
 ![Output and final-state relative RMSE of FlashKDA, CuTe and TIRx on a real Kimi-Linear prefill](figures/real_workload_accuracy.png)
 
-A MATH-500 prompt prefilled through Kimi-Linear-48B-A3B-Instruct (8183 tokens, 96 heads),
-scored against an fp64 token-by-token recurrence with FlashKDA's own test metric, relative
-RMSE. FlashKDA's error grows with context length and its final state ends at 3.45% off;
-both kernels here stay flat and keep the final state within 0.3%.
-(`scripts/real_workload_error_plots.py`, data in `figures/real_workload_error.json`.)
+A MATH-500 prompt prefilled through Kimi-Linear-48B-A3B-Instruct (8183 tokens; the 32 heads
+of KDA layers 00, 14 and 25 stacked into 96), scored against an fp64 token-by-token
+recurrence with FlashKDA's own test metric, relative RMSE. FlashKDA's error grows with
+context length and its final state ends at 3.98% off; both kernels here stay flat and keep
+the final state at 0.23% (CuTe) and 0.31% (TIRx).
+
+To reproduce it, run (after [Install](#install)):
+
+```bash
+uv run --with matplotlib --with safetensors --with huggingface_hub \
+    python scripts/real_workload_error_plots.py
+```
+
+The script downloads the three captured layers (about 1 GB) of the `math500-multi-8192`
+sample from the public Hugging Face dataset
+[`humanfia-lab/kda-datasets`](https://huggingface.co/datasets/humanfia-lab/kda-datasets)
+(folder `kda-forward/`, which documents how the captures were made) into `data/`, runs the
+fp64 reference and the three kernels, and writes `figures/real_workload_error.json` and
+`figures/real_workload_accuracy.png`. `--data DIR` changes the download directory, and
+`--plot-only` redraws the figure from the JSON without a GPU. To fetch the data by hand:
+
+```bash
+hf download humanfia-lab/kda-datasets --repo-type dataset --local-dir data \
+    kda-forward/math500-multi-8192/layer00.safetensors \
+    kda-forward/math500-multi-8192/layer14.safetensors \
+    kda-forward/math500-multi-8192/layer25.safetensors
+```
 
 ## CuTe: changes from the source branch
 
