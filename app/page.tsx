@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import RequestForm from './request-form';
 
 const DISCUSSION_URL =
@@ -268,6 +269,7 @@ export default function Home() {
           <a href="#process">How it works</a>
           <a href="#achievements">Achievements</a>
           <a href="#faq">FAQ</a>
+          <Link href="/blog/">Blog</Link>
           <a className="nav-cta" href={REPOSITORY_URL}>View GitHub <span aria-hidden="true">↗</span></a>
         </div>
       </nav>
