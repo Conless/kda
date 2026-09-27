@@ -10,40 +10,18 @@ import {
   Reveal,
   SpeedupChart,
 } from './motion';
+import { feedUrl, formatPostDate, getPost, postMetadata } from '../posts';
 import './post.css';
 
-const siteUrl = process.env.SITE_URL ?? 'https://nvlabs.github.io/kda';
-const POST_URL = `${siteUrl}/blog/2026-09-27-kda-for-kda/`;
-const POST_TITLE = 'KDA²: Kernel Design Agents Optimize Kimi Delta Attention';
-const POST_DESCRIPTION =
-  'Kernel Design Agents wrote Kimi Delta Attention kernels that run up to 2.96× faster than FlashKDA on B300 with a tenth of its state error. Here is how, and how the agents tried to cheat along the way.';
+const post = getPost('2026-09-27-kda-for-kda');
 
 const RELEASE_URL = 'https://github.com/humanfia/kda-for-kda-release';
-const REPOSITORY_URL = 'https://github.com/NVlabs/kda';
 const HUMANIZE_URL = 'https://github.com/humanfia/humanize2';
 const FLASHKDA_URL = 'https://github.com/MoonshotAI/FlashKDA';
 const FLA_URL = 'https://github.com/fla-org/flash-linear-attention';
 const KIMI_LINEAR_URL = 'https://github.com/MoonshotAI/Kimi-Linear';
 
-export const metadata: Metadata = {
-  title: `${POST_TITLE} | KDA Blog`,
-  description: POST_DESCRIPTION,
-  alternates: { canonical: POST_URL },
-  openGraph: {
-    type: 'article',
-    url: POST_URL,
-    title: POST_TITLE,
-    description: POST_DESCRIPTION,
-    publishedTime: '2026-09-27',
-    images: [{ url: `${siteUrl}/og.png`, width: 1200, height: 630, alt: 'Kernel Design Agents' }],
-  },
-  twitter: {
-    card: 'summary_large_image',
-    title: POST_TITLE,
-    description: POST_DESCRIPTION,
-    images: [`${siteUrl}/og.png`],
-  },
-};
+export const metadata: Metadata = postMetadata(post);
 
 const heroKernels = [
   { name: 'TIRx', value: 2.96, className: 'hero-bar-tirx' },
@@ -288,32 +266,18 @@ function SectionHead({ id, label, children }: { id?: string; label: string; chil
 
 export default function KdaForKdaPost() {
   return (
-    <main className="post">
+    <div className="post">
       <div className="post-progress" aria-hidden="true" />
-
-      <nav className="nav shell" aria-label="Primary navigation">
-        <Link className="brand" href="/" aria-label="Kernel Design Agents home">
-          <span className="brand-mark" aria-hidden="true">KDA</span>
-          <span>Kernel Design <b>Agents</b></span>
-        </Link>
-        <div className="nav-links">
-          <a href="#results">Results</a>
-          <a href="#hacks">Hacks</a>
-          <a href="#hardening">Hardening</a>
-          <a href="#ablation">Ablation</a>
-          <a className="nav-cta" href={RELEASE_URL}>Get the kernels <span aria-hidden="true">↗</span></a>
-        </div>
-      </nav>
 
       <header className="post-hero shell" id="top">
         <div className="post-hero-copy">
-          <div className="eyebrow"><span /> KDA Blog · September 27, 2026</div>
+          <div className="eyebrow"><span /> <Link href="/blog/">KDA Blog</Link> · <time dateTime={post.date}>{formatPostDate(post.date)}</time></div>
           <h1 className="post-title">
             KDA<sup>2</sup>
             <em>Kernel Design Agents optimize Kimi Delta Attention</em>
           </h1>
           <p className="post-dek">Results, hacks, and lessons from pointing our kernel agents at the operator they share a name with.</p>
-          <p className="post-byline">Kernel Design Agents team · NVIDIA · 12 min read</p>
+          <p className="post-byline">{post.authors} · {post.readingTime}</p>
         </div>
 
         <Reveal className="pipeline post-hero-card" threshold={0.2} label="Geomean speedup over FlashKDA on B300: TIRx 2.96×, CAKE-PTX 2.94×, CuTe-DSL 2.85×.">
@@ -611,17 +575,10 @@ export default function KdaForKdaPost() {
         </div>
       </section>
 
-      <footer className="footer shell">
-        <Link className="brand" href="/" aria-label="Kernel Design Agents home">
-          <span className="brand-mark" aria-hidden="true">KDA</span>
-          <span>Kernel Design <b>Agents</b></span>
-        </Link>
-        <p>An agentic-driven CUDA project</p>
-        <div>
-          <a href={REPOSITORY_URL}>GitHub</a>
-          <a href={HUMANIZE_URL}>Humanize</a>
-        </div>
-      </footer>
-    </main>
+      <nav className="post-endnav shell" aria-label="Blog navigation">
+        <Link className="text-link" href="/blog/"><span aria-hidden="true">←</span> All posts</Link>
+        <a className="text-link" href={feedUrl}>Subscribe via RSS <span aria-hidden="true">↗</span></a>
+      </nav>
+    </div>
   );
 }
