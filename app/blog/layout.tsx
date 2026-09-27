@@ -40,9 +40,10 @@ export default function BlogLayout({ children }: Readonly<{ children: React.Reac
           <span>Kernel Design <b>Agents</b></span>
         </Link>
         <div className="nav-links">
-          <Link href="/">Wishlist</Link>
+          <Link href="/#process">How it works</Link>
+          <Link href="/#achievements">Achievements</Link>
+          <Link href="/#faq">FAQ</Link>
           <Link href="/blog/">Blog</Link>
-          <a href={feedUrl}>RSS</a>
           <a className="nav-cta" href={REPOSITORY_URL}>View GitHub <span aria-hidden="true">↗</span></a>
         </div>
       </nav>
@@ -56,7 +57,6 @@ export default function BlogLayout({ children }: Readonly<{ children: React.Reac
         </Link>
         <p>An agentic-driven CUDA project</p>
         <div>
-          <Link href="/blog/">Blog</Link>
           <a href={REPOSITORY_URL}>GitHub</a>
           <a href={HUMANIZE_URL}>Humanize</a>
         </div>
