@@ -17,27 +17,24 @@ Inputs: bf16 `q/k/v/g [1, T, H, 128]`, bf16 beta logits `[1, T, H]`, fp32 `A_log
 fp32 `dt_bias [H*128]`, fp32 `initial_state [N, H, 128, 128]`, int64 `cu_seqlens [N+1]` or `None`.
 Outputs: bf16 `output [1, T, H, 128]`, fp32 `final_state [N, H, 128, 128]`.
 
-## Results (NVIDIA B300, 2026-09-24)
+## Results (NVIDIA B300; CuTe and TIRx 2026-09-24, PTX 2026-09-28)
 
 Measured with the KDA-internal judge (`bench_kda_forward_standalone.py`): speedup over
 FlashKDA 7afb9f4's fused CUTLASS forward, executed live on every workload; 8192 total tokens.
 
-| workload | CuTe | TIRx | PTX* |
+| workload | CuTe | TIRx | PTX |
 |---|---:|---:|---:|
-| H96 fixed (1 x 8192) | 2.760x | 3.102x | 2.797x |
-| H96 mixed varlen (6 seqs) | 3.000x | 3.038x | 3.226x |
-| H96 uniform varlen (8 x 1024) | 2.583x | 2.463x | 2.661x |
-| H64 fixed (1 x 8192) | 2.513x | 3.601x | 2.818x |
-| H64 mixed varlen (6 seqs) | 3.421x | 3.265x | 3.496x |
-| H64 uniform varlen (8 x 1024) | 2.542x | 2.412x | 2.659x |
-| **geomean** | **2.786x** | **2.950x** | **2.927x** |
-| judge correctness (workloads, stress / exact probes, holdout, 5 real probes) | 24/24 | 24/24 | see below |
+| H96 fixed (1 x 8192) | 2.760x | 3.102x | 2.770x |
+| H96 mixed varlen (6 seqs) | 3.000x | 3.038x | 3.204x |
+| H96 uniform varlen (8 x 1024) | 2.583x | 2.463x | 2.657x |
+| H64 fixed (1 x 8192) | 2.513x | 3.601x | 2.800x |
+| H64 mixed varlen (6 seqs) | 3.421x | 3.265x | 3.495x |
+| H64 uniform varlen (8 x 1024) | 2.542x | 2.412x | 2.653x |
+| **geomean** | **2.786x** | **2.950x** | **2.914x** |
+| judge correctness (workloads, stress / exact probes, holdout, 5 real probes) | 24/24 | 24/24 | 24/24 |
 
-\* PTX (2026-09-28) is measured with `bench.py`, the same timing protocol (within 0.5% of
-the judge on CuTe and TIRx). All 6 workloads pass against FLA. The judge's upload whitelist
-has no `.ptx`, so a judge submission has to embed the PTX in `.py` files. With the PTX
-embedded, the judge passes all 18 correctness-only checks (holdout, stress / exact probes,
-real probes).
+PTX was judged on 2026-09-28. The judge's upload whitelist has no `.ptx`, so that submission
+embeds each PTX file as a string in a `.py` file; the code is otherwise the same as `ptx/`.
 
 ### Accuracy on a real long prefill
 
@@ -206,7 +203,7 @@ set above), checks both outputs against FLA's Triton `chunk_kda` with the task's
 tolerance, and reports each workload's FlashKDA and kernel times and the geomean speedup.
 It follows the task's timing protocol (CUPTI, cold L2, CUDA graph, median of 30 iterations
 x 3 trials), with the task's input distributions and fixed seeds. On the B300 above it
-reports 2.799x (CuTe) and 2.963x (TIRx), within 0.5% of the judge's geomeans, and 2.927x (PTX).
+reports 2.799x (CuTe), 2.963x (TIRx) and 2.927x (PTX), within 0.5% of the judge's geomeans.
 
 A kernel passed by path must expose `run(...)` with the signature above and may expose
 `prepare(...) -> launch`, which is then planned once per workload and only `launch()` is
