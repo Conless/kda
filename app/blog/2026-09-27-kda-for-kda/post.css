@@ -12,8 +12,10 @@
 .post-title { margin: 30px 0 26px; font-size: clamp(64px, 7.6vw, 108px); line-height: .9; letter-spacing: -.072em; font-weight: 640; white-space: normal; }
 .post-title sup { position: relative; top: -.08em; margin-left: .02em; color: #5c8700; font-size: .5em; letter-spacing: 0; vertical-align: super; }
 .post-title em { display: block; max-width: 560px; margin-top: 22px; color: #67706b; font-size: clamp(27px, 2.7vw, 38px); line-height: 1.04; letter-spacing: -.055em; font-style: normal; font-weight: 450; }
+.post-title em strong { color: var(--ink); font-weight: 700; }
 .post-dek { max-width: 560px; margin: 0; color: #505a55; font-size: clamp(17px, 1.5vw, 20px); line-height: 1.58; letter-spacing: -.02em; }
-.post-byline { margin: 24px 0 0; color: #737b77; font: 500 11px/1.5 var(--font-geist-mono); }
+.post-byline { display: grid; gap: 6px; max-width: 560px; margin: 24px 0 0; color: #737b77; font: 500 11px/1.5 var(--font-geist-mono); }
+.post-byline span:first-child { color: #4b5550; font-weight: 650; }
 
 .post-hero-card { display: grid; gap: 14px; }
 .post-hero-card > * { position: relative; z-index: 1; }
@@ -28,7 +30,7 @@
 .hero-metric strong { flex: none; color: var(--acid); font-size: clamp(58px, 6vw, 84px); line-height: .82; letter-spacing: -.07em; font-weight: 650; font-variant-numeric: tabular-nums; }
 .hero-metric > span { padding-bottom: 3px; color: #99a29e; font: 500 11px/1.45 var(--font-geist-mono); }
 .hero-bars { display: grid; gap: 9px; padding: 4px 2px 2px; }
-.hero-bar { display: grid; grid-template-columns: 72px 1fr 48px; align-items: center; gap: 12px; color: #99a29e; font: 600 10px/1 var(--font-geist-mono); }
+.hero-bar { display: grid; grid-template-columns: 154px minmax(0, 1fr) 48px; align-items: center; gap: 10px; color: #99a29e; font: 600 10px/1.3 var(--font-geist-mono); }
 .hero-bar > div { height: 10px; border-radius: 3px; background: rgba(255,255,255,.05); overflow: hidden; }
 .hero-bar i { display: block; width: calc(var(--w) * 100%); height: 100%; border-radius: 3px; transform: scaleX(0); transform-origin: left; transition: transform 1.3s cubic-bezier(.2,.8,.2,1) calc(.35s + var(--i) * .12s); }
 .hero-bar b { color: white; font-weight: 600; text-align: right; }
@@ -46,7 +48,9 @@
 .post-section { padding-top: clamp(96px, 11vw, 150px); scroll-margin-top: 12px; }
 .post-section-head { grid-column: 1; align-self: start; }
 .post-section-head h2 { font-size: clamp(38px, 4vw, 56px); line-height: 1; }
-.post-prose { grid-column: 2; max-width: 690px; }
+.post-prose { grid-column: 1 / -1; max-width: none; }
+.post-section-head + .post-prose { grid-column: 2; }
+.flow-packet { filter: drop-shadow(0 0 5px rgba(160, 210, 190, .65)); }
 .post-prose p, .post-list li { margin: 0 0 22px; color: #3f4944; font-size: 18px; line-height: 1.7; letter-spacing: -.012em; }
 .post-prose h3 { margin: 38px 0 12px; font-size: 22px; letter-spacing: -.03em; font-weight: 610; }
 .post-prose h3:first-child { margin-top: 4px; }
@@ -56,13 +60,55 @@
 .post-prose q { color: var(--ink); font-weight: 560; }
 .post-prose-lead p { color: var(--ink); font-size: clamp(21px, 1.9vw, 25px); line-height: 1.55; letter-spacing: -.025em; }
 .post-callout { display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 18px 20px; border: 1px solid var(--ink); border-radius: 10px; background: var(--acid); font-size: 15px !important; font-weight: 560; }
-.post-callout a { font: 650 13px/1.6 var(--font-geist-mono); }
+.post-callout a { overflow-wrap: anywhere; font: 650 13px/1.6 var(--font-geist-mono); }
+.conclusion-callout { grid-column: 1 / -1; margin: 0; }
+.conclusion-callout a { border-bottom: 1px solid currentColor; color: var(--ink); }
 .post-aside { color: #69716d !important; font: 500 12px/1.6 var(--font-geist-mono) !important; }
 .post-pullquote { margin: 34px 0 !important; padding-left: 22px; border-left: 3px solid var(--acid); color: var(--ink) !important; font-size: clamp(25px, 2.4vw, 32px) !important; line-height: 1.2 !important; letter-spacing: -.045em !important; font-weight: 600; }
 .post-list { margin: 0 0 22px; padding-left: 22px; }
 .post-list li::marker { color: #5c8700; font: 650 14px var(--font-geist-mono); }
 .post-figure { grid-column: 1 / -1; margin: 18px 0 44px; }
 .post-figure figcaption { max-width: 760px; margin-top: 14px; color: #69716d; font: 500 11px/1.6 var(--font-geist-mono); }
+.progress-figure { margin-top: 4px; }
+.progress-card { padding: clamp(20px, 3vw, 32px); border-radius: 18px; background: var(--ink); color: white; }
+.progress-heading { display: flex; justify-content: space-between; align-items: end; flex-wrap: wrap; gap: 18px; }
+.progress-heading .section-label { color: var(--acid); }
+.progress-heading h3 { margin: 10px 0 0; font-size: clamp(26px, 3vw, 40px); letter-spacing: -.05em; line-height: 1; }
+.progress-key { display: flex; flex-wrap: wrap; gap: 10px 18px; color: #b1bab5; font: 500 11px/1.4 var(--font-geist-mono); }
+.progress-key span { white-space: nowrap; }
+.progress-swatch { display: inline-block; width: 15px; height: 3px; margin-right: 5px; vertical-align: middle; border-radius: 2px; }
+.progress-kda { background: var(--acid); }
+.progress-cake { background: #ffbb33; }
+.progress-int21 { background: #5eb9ff; }
+.progress-scroll { overflow-x: auto; margin-top: 22px; }
+.progress-scroll svg { display: block; width: 100%; min-width: 900px; height: auto; }
+.progress-gridline { stroke: rgba(255,255,255,.13); stroke-width: 1; }
+.progress-axis { fill: #aab4ae; font: 500 11px var(--font-geist-mono); }
+.progress-milestone-label { fill: #f3f5ef; font: 700 16px var(--font-geist-sans); letter-spacing: -.025em; }
+.progress-milestone-detail { fill: #aab4ae; font: 500 10px var(--font-geist-mono); }
+.progress-milestone-arrow { fill: none; stroke-width: 2; stroke-dasharray: 4 6; stroke-linecap: round; opacity: .9; }
+.progress-milestone-ring { fill: var(--ink); stroke-width: 3; }
+.progress-milestone-humanize .progress-milestone-arrow, .progress-milestone-humanize.progress-milestone-ring { stroke: var(--acid); }
+.progress-milestone-tirx .progress-milestone-arrow, .progress-milestone-tirx.progress-milestone-ring { stroke: #a9b1ad; }
+.progress-milestone-cake .progress-milestone-arrow, .progress-milestone-cake.progress-milestone-ring { stroke: #ffbb33; }
+.progress-line { fill: none; stroke-width: 3.5; stroke-linecap: round; stroke-linejoin: round; }
+.progress-line-kda { stroke: var(--acid); }
+.progress-line-cake { stroke: #ffbb33; }
+.progress-point { stroke: var(--ink); stroke-width: 2; }
+.progress-point-kda { fill: var(--acid); }
+.progress-point-cake { fill: #ffbb33; }
+.progress-point-int21 { fill: #5eb9ff; }
+.progress-end-label { fill: var(--acid); font: 700 16px var(--font-geist-mono); }
+.post-figure .progress-caption { max-width: none; margin-top: 12px; }
+.progress-captions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.progress-captions > div { display: grid; gap: 8px; padding: 20px 24px; border: 1px solid var(--ink); border-radius: 10px; }
+.progress-caption-cake { background: #fff1cb; }
+.progress-caption-tirx { background: var(--acid); }
+.progress-captions span { color: #59605c; font: 650 10px/1.3 var(--font-geist-mono); letter-spacing: .1em; }
+.progress-captions strong { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; color: var(--ink); font-size: clamp(18px, 2vw, 25px); line-height: 1.1; letter-spacing: -.04em; }
+.progress-captions b { font-size: clamp(28px, 3vw, 42px); font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.progress-captions small { color: #4b5550; font: 500 11px/1.45 var(--font-geist-mono); }
+.progress-caption p { margin: 10px 0 0; color: #69716d; font: 500 11px/1.55 var(--font-geist-mono); }
 .post-features { width: 100%; }
 .post-features .workflow-grid { grid-template-columns: repeat(3, 1fr); }
 .post-features .workflow-step { min-height: 300px; }
@@ -366,7 +412,7 @@ svg { max-width: 100%; }
   .post-hero-card { width: min(620px, 100%); }
   .post-intro, .post-section { grid-template-columns: 1fr; }
   .post-section-head { margin-bottom: 34px; }
-  .post-prose { grid-column: 1; }
+  .post-prose, .post-section-head + .post-prose { grid-column: 1 / -1; }
   .post-features .workflow-grid { grid-template-columns: 1fr; }
   .post-features .workflow-step, .post-features .workflow-step:nth-child(n) { min-height: 0; border: 1px solid var(--panel-line); border-radius: 0; }
   .post-features .workflow-step + .workflow-step { border-top: 0; }
@@ -388,6 +434,7 @@ svg { max-width: 100%; }
   .speedup-bars { margin-right: 50px; }
   .hack-grid, .gauntlet-grid, .release-tiles { grid-template-columns: 1fr; }
   .loop-card { grid-template-columns: 1fr; justify-items: start; }
+  .progress-captions { grid-template-columns: 1fr; }
   .decay-track { height: 200px; }
   .decay-marker { width: 140px; }
   .gauntlet-lane::before { right: 84px; }
@@ -398,4 +445,5 @@ svg { max-width: 100%; }
   .post-progress { display: none; }
   .reveal:not(.is-in) { opacity: 1; transform: none; }
   .gauntlet-packet { display: none; }
+  .flow-packet { display: none; }
 }

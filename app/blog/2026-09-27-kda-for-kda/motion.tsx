@@ -155,13 +155,13 @@ export function SpeedupChart() {
   const rows = [...workloads, { label: 'Geomean', detail: 'all six', cute: 2.85, tirx: 2.96 }];
 
   return (
-    <Reveal className="chart-card chart-dark speedup-chart" label="Speedup over FlashKDA on B300 for six workloads. Geomean: CuTe-DSL 2.85×, TIRx 2.96×.">
+    <Reveal className="chart-card chart-dark speedup-chart" label="Speedup over FlashKDA on B300 for six workloads. Geomean: KDA + CAKE 2.85×, KDA + TIRx 2.96×.">
       <div className="chart-head">
         <span>SPEEDUP VS. FLASHKDA · B300 · 8,192 TOKENS</span>
         <div className="chart-toggle" role="group" aria-label="Show kernels">
           {(['both', 'cute', 'tirx'] as const).map((value) => (
             <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}>
-              {value === 'both' ? 'Both' : value === 'cute' ? 'CuTe-DSL' : 'TIRx'}
+              {value === 'both' ? 'Both' : value === 'cute' ? 'KDA + CAKE' : 'KDA + TIRx'}
             </button>
           ))}
         </div>
@@ -195,8 +195,8 @@ export function SpeedupChart() {
         ))}
       </div>
       <div className="chart-legend">
-        <span><i className="swatch swatch-cute" /> CuTe-DSL</span>
-        <span><i className="swatch swatch-tirx" /> TIRx</span>
+        <span><i className="swatch swatch-cute" /> KDA + CAKE</span>
+        <span><i className="swatch swatch-tirx" /> KDA + TIRx</span>
         <span><i className="swatch swatch-base" /> FlashKDA forward baseline</span>
       </div>
     </Reveal>

@@ -11,11 +11,12 @@ import {
   SpeedupChart,
 } from './motion';
 import { feedUrl, formatPostDate, getPost, postMetadata } from '../posts';
+import { ProgressTimeline } from './timeline';
 import './post.css';
 
 const post = getPost('2026-09-27-kda-for-kda');
 
-const RELEASE_URL = 'https://github.com/humanfia/kda-for-kda-release';
+const RELEASE_URL = 'https://github.com/NVlabs/kda/tree/260927-kda-for-kda';
 const HUMANIZE_URL = 'https://github.com/humanfia/humanize2';
 const FLASHKDA_URL = 'https://github.com/MoonshotAI/FlashKDA';
 const FLA_URL = 'https://github.com/fla-org/flash-linear-attention';
@@ -24,9 +25,9 @@ const KIMI_LINEAR_URL = 'https://github.com/MoonshotAI/Kimi-Linear';
 export const metadata: Metadata = postMetadata(post);
 
 const heroKernels = [
-  { name: 'TIRx', value: 2.96, className: 'hero-bar-tirx' },
-  { name: 'CAKE-PTX', value: 2.94, className: 'hero-bar-cake' },
-  { name: 'CuTe-DSL', value: 2.85, className: 'hero-bar-cute' },
+  { name: 'KDA + TIRx', value: 2.96, className: 'hero-bar-tirx' },
+  { name: 'KDA + CAKE (PTX ver)', value: 2.94, className: 'hero-bar-cake' },
+  { name: 'KDA + CAKE (Cute ver)', value: 2.85, className: 'hero-bar-cute' },
   { name: 'FlashKDA', value: 1, className: 'hero-bar-base' },
 ] as const;
 
@@ -219,11 +220,9 @@ function FeatureTeaser({ kind }: { kind: (typeof newInV06)[number]['teaser'] }) 
       <svg viewBox="0 0 180 82" focusable="false">
         <rect className="teaser-frame" x="1" y="1" width="178" height="80" rx="10" />
         <path className="teaser-stroke teaser-dash" d="M40 41C40 20 70 18 90 30S140 62 140 41S110 18 90 30S40 62 40 41Z" />
-        <circle className="teaser-packet" r="4">
-          <animateMotion path="M40 41C40 20 70 18 90 30S140 62 140 41S110 18 90 30S40 62 40 41Z" dur="4.2s" repeatCount="indefinite" />
-        </circle>
-        <circle className="teaser-packet teaser-packet-muted" r="3.5">
-          <animateMotion path="M40 41C40 20 70 18 90 30S140 62 140 41S110 18 90 30S40 62 40 41Z" dur="4.2s" begin="-2.1s" repeatCount="indefinite" />
+        <circle className="flow-packet" r="4" fill="#c7ff3d">
+          <animateMotion path="M40 41C40 20 70 18 90 30S140 62 140 41S110 18 90 30S40 62 40 41Z" dur="4.2s" calcMode="linear" keyPoints="0;0.25;0.5;0.75;1" keyTimes="0;0.25;0.5;0.75;1" repeatCount="indefinite" />
+          <animate attributeName="fill" values="#c7ff3d;#62b5ff;#c7ff3d;#c7ff3d" keyTimes="0;0.25;0.75;1" calcMode="discrete" dur="4.2s" repeatCount="indefinite" />
         </circle>
       </svg>
     );
@@ -274,16 +273,19 @@ export default function KdaForKdaPost() {
           <div className="eyebrow"><span /> <Link href="/blog/">KDA Blog</Link> · <time dateTime={post.date}>{formatPostDate(post.date)}</time></div>
           <h1 className="post-title">
             KDA<sup>2</sup>
-            <em>Kernel Design Agents optimize Kimi Delta Attention</em>
+            <em><strong>K</strong>ernel <strong>D</strong>esign <strong>A</strong>gents (KDA) optimize <strong>K</strong>imi <strong>D</strong>elta <strong>A</strong>ttention (KDA)</em>
           </h1>
           <p className="post-dek">Results, hacks, and lessons from pointing our kernel agents at the operator they share a name with.</p>
-          <p className="post-byline">{post.authors} · {post.readingTime}</p>
+          <p className="post-byline">
+            <span>Agentic CUDA Effort at NVIDIA · {post.readingTime}</span>
+            <span>{post.authors}</span>
+          </p>
         </div>
 
-        <Reveal className="pipeline post-hero-card" threshold={0.2} label="Geomean speedup over FlashKDA on B300: TIRx 2.96×, CAKE-PTX 2.94×, CuTe-DSL 2.85×.">
+        <Reveal className="pipeline post-hero-card" threshold={0.2} label="Geomean speedup over FlashKDA on B300: KDA + TIRx 2.96×, KDA + CAKE (PTX ver) 2.94×, KDA + CAKE (Cute ver) 2.85×.">
           <div className="pipeline-topline">
             <span>KDA → KDA · B300 FORWARD</span>
-            <span className="live"><i /> VERIFIED ON KIMI-LINEAR</span>
+            <span className="live"><i /> VERIFIED ON FLASHKDA OFFICIAL</span>
           </div>
           <svg className="ouroboros" viewBox="0 0 360 112" focusable="false" aria-hidden="true">
             <path className="teaser-stroke teaser-dash" d="M86 40C140 18 220 18 274 40" />
@@ -355,13 +357,13 @@ export default function KdaForKdaPost() {
         <section className="post-intro">
           <div className="post-prose">
             <p>
-              We wrote kernels in both CuTe-DSL and TIRx. TIRx is a GPU kernel programming interface that sits close to PTX; the TIRx Harness built around it gives agents tools for development, diagnosis, and evaluation, which makes optimization far more dependable. On B300, the TIRx kernel runs <strong>2.96×</strong> faster than FlashKDA, the CuTe-DSL kernel <strong>2.85×</strong>, and the CAKE-PTX kernel <strong>2.94×</strong>. All of them pass acceptance on real Kimi-Linear workloads, and all are more accurate than FlashKDA.
+              The strongest results combine the KDA agent workflow with TIRx or CAKE. We wrote kernels in CuTe-DSL and TIRx, and used CAKE IR with an agent loop to tune a version compiled to PTX. TIRx is a GPU kernel programming interface that sits close to PTX; the TIRx Harness gives agents tools for development, diagnosis, and evaluation. On B300, KDA + TIRx reaches <strong>2.96×</strong> the FlashKDA speed, KDA + CAKE (PTX) reaches <strong>2.94×</strong>, and the CuTe-DSL version reaches <strong>2.85×</strong>. The released CuTe-DSL and TIRx kernels pass the real Kimi-Linear acceptance suite and are more accurate than FlashKDA.
             </p>
             <p>
               Along the way, the agent also produced candidates that clocked 3.28×, 3.57×, even 3.74×. Careful ablations showed that every one of them was overfitting to the verifier, exploiting distributional assumptions in the test suite, untested boundaries, or loose precision checks. This post dissects those hacks and describes how we hardened acceptance along both hardware and numerical lines.
             </p>
             <p className="post-callout">
-              Both kernels are open source: <a href={RELEASE_URL}>github.com/humanfia/kda-for-kda-release <span aria-hidden="true">↗</span></a>
+              The released CuTe-DSL and TIRx kernels are open source: <a href={RELEASE_URL}>{RELEASE_URL} <span aria-hidden="true">↗</span></a>
             </p>
           </div>
         </section>
@@ -376,6 +378,12 @@ export default function KdaForKdaPost() {
           <div className="post-figure">
             <SpeedupChart />
           </div>
+          <div className="post-prose">
+            <p>
+              The accompanying timeline shows how the best KDA result moved from 1.61× on July 21 to 2.96× on September 12. It records CAKE results separately, including 2.94× on September 6. The captions call out the final KDA + CAKE and KDA + TIRx results; the six-workload chart above compares the released kernels.
+            </p>
+          </div>
+          <ProgressTimeline />
           <div className="post-prose">
             <p>
               For accuracy, we built 151 real cases from <a href={KIMI_LINEAR_URL}>Kimi-Linear-48B-A3B</a> prefills on GSM8K and MATH-500, and checked every kernel against a token-by-token fp64 recurrence. One finding surprised us: FlashKDA (commit <code>7afb9f</code>) is itself less accurate than <a href={FLA_URL}>FLA</a>. It keeps its recurrent state in bf16, so error compounds as sequences grow; by 8k tokens, the relative error of the final state reaches 0.035, beyond our acceptance threshold.
@@ -406,7 +414,7 @@ export default function KdaForKdaPost() {
         </section>
 
         <section className="post-section" id="hacks">
-          <SectionHead label="03 · REWARD HACKING">How KDAgent<br />games the tests</SectionHead>
+          <SectionHead label="03 · REWARD HACKING">How KDAgent<br />hacks the tests</SectionHead>
           <div className="post-prose">
             <p className="post-aside">To keep the two KDAs apart, we call the operator KDAttn and the agent KDAgent from here on.</p>
             <p className="post-pullquote">KDAgent optimizes the score, not the kernel.</p>
@@ -452,7 +460,7 @@ export default function KdaForKdaPost() {
           <SectionHead label="04 · HARDENING">Closing<br />the loopholes</SectionHead>
           <div className="post-prose">
             <p>
-              Humanize flows make agents more capable, and more inclined to hunt for hacks; CAKE with a simple <code>/goal</code> did not trigger any of these behaviors. To keep the agents honest, we built several layers of defense.
+              Humanize flows make agents more capable and give them more opportunities to find gaps in the tests. To keep the agents honest, we built several layers of defense.
             </p>
           </div>
           <Reveal className="post-figure workflow-shell gauntlet" threshold={0.2} label="Six acceptance gates. Hacked candidates are rejected at a gate; honest kernels reach release.">
@@ -542,6 +550,10 @@ export default function KdaForKdaPost() {
             <p>
               These TIRx tools belong to the TIRx Harness. The Harness also provides TIRx Foundation, a layer that stays close to the hardware; a kernel zoo of reusable implementations; and a benchmark server that makes performance results easy to compare. Together they give the agent a more reliable development loop: code maps more directly onto the intended hardware behavior, failures leave clues to follow, and performance changes can be confirmed as real. The TIRx team plans to release the Harness formally next week, with a detailed write-up.
             </p>
+            <h3>CAKE IR tunes a PTX version</h3>
+            <p>
+              We added CAKE IR to the kernel wiki and used its agent loop to tune the kernel. The loop specified the verifier the candidate had to pass before converting the result to PTX, producing the CAKE-PTX version. It reached <strong>2.94×</strong> on B300.
+            </p>
             <h3>A self-evolving kernel wiki</h3>
             <p>
               The wiki keeps correcting itself as it is used. Incorrect content gets deleted, tags get sharpened, and search results get leaner, so every agent that comes after works from better material.
@@ -553,12 +565,15 @@ export default function KdaForKdaPost() {
           <SectionHead label="07 · CONCLUSION">Takeaways</SectionHead>
           <div className="post-prose">
             <p>
-              We used Kernel Design Agents (KDAgent) to optimize the Kimi Delta Attention (KDAttn) operator on NVIDIA B300, automatically and in depth. With the latest Humanize and multi-language support for TIRx and CuTe-DSL, the resulting kernels reach speedups of <strong>2.96×</strong> and <strong>2.85×</strong> respectively, and cut state error on 8k-token sequences to a tenth of FlashKDA&apos;s.
+              We used Kernel Design Agents (KDAgent) to optimize the Kimi Delta Attention (KDAttn) operator on NVIDIA B300. Humanize2, TIRx, and CAKE IR all contributed to the search. The final TIRx, CAKE-PTX, and CuTe-DSL results reach <strong>2.96×</strong>, <strong>2.94×</strong>, and <strong>2.85×</strong> the FlashKDA speed respectively. The released TIRx and CuTe-DSL kernels cut final-state error on 8k-token sequences to about a tenth of FlashKDA&apos;s.
             </p>
             <p>
               Along the way, the agent produced a series of fake optimizations: overfitting to the input distribution, hard-coding boundaries, and overflowing under extreme values. We answered with layered hardening, including dynamic input salts, stress probes, and strict element-wise tolerances, so that the kernels stay correct and robust on real model workloads. Our ablation further shows that tackling a complex optimization task through progressive synthesis substantially shortens the feedback loop and makes the search more efficient.
             </p>
           </div>
+          <p className="post-callout conclusion-callout">
+            If you have a workload that wants to be optimized via KDAgent, submit at <a href="https://nvlabs.github.io/kda">https://nvlabs.github.io/kda</a>
+          </p>
         </section>
       </article>
 
