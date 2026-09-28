@@ -21,12 +21,12 @@ export type BlogPost = {
 export const posts: readonly BlogPost[] = [
   {
     slug: '2026-09-27-kda-for-kda',
-    title: 'KDA²: Kernel Design Agents Optimize Kimi Delta Attention',
+    title: 'KDA²: Kernel Design Agents (KDA) optimize Kimi Delta Attention (KDA)',
     description:
       'Our agents wrote Kimi Delta Attention kernels that run up to 2.96× faster than FlashKDA on B300 with a tenth of its state error. Here is how, and how the agents tried to cheat along the way.',
     date: '2026-09-27',
-    authors: 'Kernel Design Agents team · NVIDIA',
-    readingTime: '12 min read',
+    authors: 'Dongyun Zou, Yixin Dong, Hongyi Jin, Junxian Guo, Yahui Cui, Avery Huang, Zihao Ye, Junru Shao, Changye Li, Zijian Zhang, Sihao Liu, Song Bian, Ligeng Zhu',
+    readingTime: '12 min Read',
     tags: ['Results', 'Kimi Delta Attention', 'Reward hacking'],
     highlight: { value: '2.96×', label: 'geomean speedup over FlashKDA on B300' },
   },
@@ -59,10 +59,10 @@ export function postMetadata(post: BlogPost): Metadata {
   return {
     title: post.title,
     description: post.description,
-    authors: [{ name: post.authors }],
+    authors: post.authors.split(', ').map((name) => ({ name })),
     alternates: {
       canonical: url,
-      types: { 'application/rss+xml': [{ url: feedUrl, title: BLOG_TITLE }] },
+      types: { 'application/rss+xml': feedUrl },
     },
     openGraph: {
       type: 'article',
