@@ -1,4 +1,4 @@
-"""FlashKDA vs our CuTe and TIRx kernels on a real Kimi-Linear prefill workload.
+"""FlashKDA vs our CuTe, TIRx and PTX kernels on a real Kimi-Linear prefill workload.
 
     uv run --with matplotlib --with safetensors --with huggingface_hub python scripts/real_workload_error_plots.py
     uv run --with matplotlib python scripts/real_workload_error_plots.py --plot-only
@@ -38,7 +38,7 @@ D = 128
 EPS = 1e-6
 WINDOW, SMOOTH = 64, 8
 
-KERNELS = [("FlashKDA", "#2a78d6"), ("Ours (CuTe)", "#e8702a"), ("Ours (TIRx)", "#1baf7a")]
+KERNELS = [("FlashKDA", "#2a78d6"), ("Ours (CuTe)", "#e8702a"), ("Ours (TIRx)", "#1baf7a"), ("Ours (PTX)", "#eda100")]
 
 
 def load_kernel(name, path):
@@ -133,7 +133,9 @@ def compute(data_dir):
 
     cute = load_kernel("cute_kernel", ROOT / "cute/kernel.py")
     tirx = load_kernel("tirx_kernel", ROOT / "tirx/kernel.py")
-    fns = {"FlashKDA": lambda *a: fla_chunk_kda(True, *a), "Ours (CuTe)": cute.run, "Ours (TIRx)": tirx.run}
+    ptx = load_kernel("ptx_kernel", ROOT / "ptx/kernel.py")
+    fns = {"FlashKDA": lambda *a: fla_chunk_kda(True, *a), "Ours (CuTe)": cute.run, "Ours (TIRx)": tirx.run,
+           "Ours (PTX)": ptx.run}
     T, H = args[0].shape[1], args[0].shape[2]
     row = {"case": f"MATH-500, 1 seq x {T}", "sample": SAMPLE, "layers": list(LAYERS), "T": T, "H": H, "kernels": {}}
     for label, fn in fns.items():
@@ -174,7 +176,8 @@ def plot(row):
     ax.legend(fontsize=16, frameon=False, loc="upper left")
 
     values = [100 * row["kernels"][label]["final_state"] for label, _ in KERNELS]
-    bars = bx.bar([label for label, _ in KERNELS], values, color=[c for _, c in KERNELS], width=0.6)
+    bars = bx.bar([label.replace(" (", "\n(") for label, _ in KERNELS], values,
+                  color=[c for _, c in KERNELS], width=0.6)
     bx.bar_label(bars, fmt="%.2f%%", padding=3)
     bx.set_ylabel("final-state relative RMSE (%)")
     bx.set_title(f"Final state after {row['T']} tokens")

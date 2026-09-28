@@ -2,6 +2,7 @@
 
     uv run python bench.py cute
     uv run python bench.py tirx
+    uv run python bench.py ptx
     uv run python bench.py path/to/kernel.py
 
 The six timed workloads of the KDA-internal ``kda_forward`` task (Int21-AI/KDA-B200
@@ -44,7 +45,7 @@ WORKLOADS = {
     "h64-mixed_varlen": (64, MIXED),
     "h64-uniform_varlen": (64, [1024] * 8),
 }
-KERNELS = {"cute": "cute/kernel.py", "tirx": "tirx/kernel.py"}
+KERNELS = {"cute": "cute/kernel.py", "tirx": "tirx/kernel.py", "ptx": "ptx/kernel.py"}
 
 
 def make_inputs(heads, seq_lens, seed, device="cuda"):
@@ -164,7 +165,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument(
         "kernel",
-        help="cute, tirx, or a path to a kernel.py exposing run (and optionally prepare)",
+        help="cute, tirx, ptx, or a path to a kernel.py exposing run (and optionally prepare)",
     )
     ap.add_argument(
         "--workloads", nargs="*", default=list(WORKLOADS), choices=list(WORKLOADS)

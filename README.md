@@ -1,9 +1,9 @@
 # KDA forward kernels for NVIDIA Blackwell
 
-Two independent implementations of the Kimi Delta Attention (KDA) forward pass
+Three implementations of the Kimi Delta Attention (KDA) forward pass
 (chunked, per-channel-gated delta rule; K3 gate `-5 * sigmoid(exp(A_log) * (g + dt_bias))`,
 in-kernel q/k L2 normalization, `beta = sigmoid(beta)`, fp32 V-first recurrent state),
-both following the KDA-internal `kda_forward` task ABI:
+all following the KDA-internal `kda_forward` task ABI:
 
     run(q, k, v, g, beta, A_log, dt_bias, scale, initial_state, cu_seqlens) -> (output, final_state)
 
@@ -11,6 +11,7 @@ both following the KDA-internal `kda_forward` task ABI:
 |---|---|---|---|
 | `cute/` | CuTe DSL (Python) | `cute/kernel.py` (`run`) | humanfia/kda-for-kda `yahui-2.88x-cute` @ `dde00d0`, with three fixes (see below) |
 | `tirx/` | TIRx (TVM) | `tirx/kernel.py` (`prepare` / `run`) | humanfia/kda-tirx `20260922-b300-tune` @ `def3dfc` (judge submission `2b64c874`), with its size limits lifted (see below) |
+| `ptx/` | static PTX (sm_103a) + TVM FFI host shims | `ptx/kernel.py` (`prepare` / `run`) | humanfia/kda-for-kda `yahui-2.89x-ptx` @ `82a6a79`, with three fixes (see below) |
 
 Inputs: bf16 `q/k/v/g [1, T, H, 128]`, bf16 beta logits `[1, T, H]`, fp32 `A_log [H]`,
 fp32 `dt_bias [H*128]`, fp32 `initial_state [N, H, 128, 128]`, int64 `cu_seqlens [N+1]` or `None`.
@@ -21,26 +22,32 @@ Outputs: bf16 `output [1, T, H, 128]`, fp32 `final_state [N, H, 128, 128]`.
 Measured with the KDA-internal judge (`bench_kda_forward_standalone.py`): speedup over
 FlashKDA 7afb9f4's fused CUTLASS forward, executed live on every workload; 8192 total tokens.
 
-| workload | CuTe | TIRx |
-|---|---:|---:|
-| H96 fixed (1 x 8192) | 2.760x | 3.102x |
-| H96 mixed varlen (6 seqs) | 3.000x | 3.038x |
-| H96 uniform varlen (8 x 1024) | 2.583x | 2.463x |
-| H64 fixed (1 x 8192) | 2.513x | 3.601x |
-| H64 mixed varlen (6 seqs) | 3.421x | 3.265x |
-| H64 uniform varlen (8 x 1024) | 2.542x | 2.412x |
-| **geomean** | **2.786x** | **2.950x** |
-| judge correctness (workloads, stress / exact probes, holdout, 5 real probes) | 24/24 | 24/24 |
+| workload | CuTe | TIRx | PTX* |
+|---|---:|---:|---:|
+| H96 fixed (1 x 8192) | 2.760x | 3.102x | 2.797x |
+| H96 mixed varlen (6 seqs) | 3.000x | 3.038x | 3.226x |
+| H96 uniform varlen (8 x 1024) | 2.583x | 2.463x | 2.661x |
+| H64 fixed (1 x 8192) | 2.513x | 3.601x | 2.818x |
+| H64 mixed varlen (6 seqs) | 3.421x | 3.265x | 3.496x |
+| H64 uniform varlen (8 x 1024) | 2.542x | 2.412x | 2.659x |
+| **geomean** | **2.786x** | **2.950x** | **2.927x** |
+| judge correctness (workloads, stress / exact probes, holdout, 5 real probes) | 24/24 | 24/24 | see below |
+
+\* PTX (2026-09-28) is measured with `bench.py`, the same timing protocol (within 0.5% of
+the judge on CuTe and TIRx). All 6 workloads pass against FLA. The judge's upload whitelist
+has no `.ptx`, so a judge submission has to embed the PTX in `.py` files. With the PTX
+embedded, the judge passes all 18 correctness-only checks (holdout, stress / exact probes,
+real probes).
 
 ### Accuracy on a real long prefill
 
-![Output and final-state relative RMSE of FlashKDA, CuTe and TIRx on a real Kimi-Linear prefill](figures/real_workload_accuracy.png)
+![Output and final-state relative RMSE of FlashKDA, CuTe, TIRx and PTX on a real Kimi-Linear prefill](figures/real_workload_accuracy.png)
 
 A MATH-500 prompt prefilled through Kimi-Linear-48B-A3B-Instruct (8183 tokens; the 32 heads
 of KDA layers 00, 14 and 25 stacked into 96), scored against an fp64 token-by-token
 recurrence with FlashKDA's own test metric, relative RMSE. FlashKDA's error grows with
-context length and its final state ends at 3.98% off; both kernels here stay flat and keep
-the final state at 0.23% (CuTe) and 0.31% (TIRx).
+context length and its final state ends at 3.98% off; the three kernels here stay flat and
+keep the final state at 0.23% (CuTe), 0.31% (TIRx) and 0.19% (PTX).
 
 To reproduce it, run (after [Install](#install)):
 
@@ -53,7 +60,7 @@ The script downloads the three captured layers (about 1 GB) of the `math500-mult
 sample from the public Hugging Face dataset
 [`humanfia-lab/kda-datasets`](https://huggingface.co/datasets/humanfia-lab/kda-datasets)
 (folder `kda-forward/`, which documents how the captures were made) into `data/`, runs the
-fp64 reference and the three kernels, and writes `figures/real_workload_error.json` and
+fp64 reference and the four kernels, and writes `figures/real_workload_error.json` and
 `figures/real_workload_accuracy.png`. `--data DIR` changes the download directory, and
 `--plot-only` redraws the figure from the JSON without a GPU. To fetch the data by hand:
 
@@ -90,9 +97,50 @@ speed are unchanged):
   the 160-entry SMEM table are read from global memory, the sequence-count cap is removed,
   and token offsets are packed into 21 bits instead of 16.
 
+## PTX: provenance and changes
+
+The static PTX forward implementation of kda-for-kda `yahui-2.89x-ptx`. Its latest commit
+`82a6a79` fixes a flush-to-zero precision loss in slow-decay channels of the first release
+`d3a08ef`.
+- Four retained PTX kernels (`kda_ptx/shims/*.ptx`, `.target sm_103a`) are launched
+  through TVM FFI host shims (`kda_ptx/shims/*.cc`).
+- A Python host scheduler (`kda_ptx/scheduler.py`) packs every (sequence, head) recurrence
+  onto the SMs. It splits long ones across CTAs with an in-kernel FP32 state handoff.
+- The scheduler has hand-picked plans for the six Int21 layouts. Shifting the mixed layout
+  by one token gives the same speed (3.22x / 3.49x vs 3.21x / 3.50x on `bench.py`'s timer).
+- Two cases run an exact token-by-token Triton recurrence (`kda_ptx/recurrent_kernel.py`)
+  whose initial and final states pass through BF16 staging:
+  - head counts other than 64 and 96;
+  - initial states above 2^12 in magnitude.
+
+Changes from the source branch:
+
+- The PTX is `.version 9.2`, which drivers older than CUDA 13.2 (such as 580) cannot JIT.
+  `kda_ptx/static_runtime.py` instead assembles each file once and embeds the cubin:
+  - it uses ptxas >= 13.2, from the `nvidia-cuda-nvcc` wheel or `KDA_PTXAS`;
+  - the cubins are cached in `~/.cache/kda-ptx` (set `KDA_PTX_CACHE_DIR` to change it).
+- The host shims kept one process-wide cache of TMA descriptors and uploaded a new one for
+  every tensor address they saw. This caused two failures:
+  - it never freed slots, so a process ran out of its 4096 slots after about 700 calls with
+    varying shapes;
+  - how much host-to-device work a call did depended on allocator address reuse, which the
+    judge's per-call CUPTI check rejects.
+
+  Each prepared launch now owns a descriptor table, which `prepare` encodes and uploads once
+  (outside any capture); a launch only passes pointers into it. The kernels acquire each
+  descriptor with `fence.proxy.tensormap` before use, so the PTX is unchanged.
+- `kernel.py` exports `prepare` as well as `run`.
+  - The source entry exports only `run`, which plans on every call and cannot be captured in
+    a CUDA graph. The judge rejects it, and timed as issued it runs at 0.25x.
+- Packaging only:
+  - the source's `impl/` package is `kda_ptx/` here, so it loads in the same process as
+    CuTe's `impl/`;
+  - its compatibility modules (`impl/kernel.py`, `impl/forward.py`) and benchmark script are
+    left out.
+
 ## Environment
 
-Both kernels, the FlashKDA baseline and the benchmark share one uv environment, pinned in
+All three kernels, the FlashKDA baseline and the benchmark share one uv environment, pinned in
 `pyproject.toml` / `uv.lock`:
 
 | component | version | used by |
@@ -101,6 +149,7 @@ Both kernels, the FlashKDA baseline and the benchmark share one uv environment, 
 | torch | 2.12.1+cu130 | all |
 | nvidia-cutlass-dsl (CuTe DSL) | 4.7.0 | CuTe kernel |
 | apache-tvm (with TIRx), apache-tvm-ffi, tirx-kernels | git ed5e2fed3, be35ec1, 65d9a075 | TIRx kernel |
+| apache-tvm-ffi, nvidia-cuda-nvcc (ptxas), triton (with torch) | git be35ec1, 13.2.86, 3.7.1 | PTX kernel |
 | flash-kda (FlashKDA) | git 7afb9f4 | baseline |
 | fla-core | 0.5.2 | baseline wrapper, correctness reference |
 | flashinfer-python, cupti-python | 0.6.13, 13.0.1 | CUPTI timer |
@@ -110,7 +159,8 @@ wheels.
 
 ### Prerequisites
 
-- An NVIDIA Blackwell GPU (sm_100a / sm_103a) with a driver for CUDA 13.
+- An NVIDIA Blackwell GPU (sm_100a / sm_103a) with a driver for CUDA 13. The PTX kernel
+  runs on B300 (sm_103a) only.
 - The CUDA 13 toolkit (`nvcc`); FlashKDA's CUTLASS extension is built with it.
 - A C++17 compiler, CMake >= 3.18, and the LLVM 18 development files TVM needs for host
   code generation.
@@ -148,7 +198,7 @@ uv run python -c "import cutlass, tvm, tirx_kernels.tirx_lite, flash_kda, fla; p
 ## Benchmark
 
 ```bash
-uv run python bench.py cute    # or: tirx, or a path to another kernel.py
+uv run python bench.py cute    # or: tirx, ptx, or a path to another kernel.py
 ```
 
 `bench.py` runs the six timed workloads of the KDA-internal `kda_forward` task (the Int21
@@ -156,7 +206,7 @@ set above), checks both outputs against FLA's Triton `chunk_kda` with the task's
 tolerance, and reports each workload's FlashKDA and kernel times and the geomean speedup.
 It follows the task's timing protocol (CUPTI, cold L2, CUDA graph, median of 30 iterations
 x 3 trials), with the task's input distributions and fixed seeds. On the B300 above it
-reports 2.799x (CuTe) and 2.963x (TIRx), within 0.5% of the judge's geomeans.
+reports 2.799x (CuTe) and 2.963x (TIRx), within 0.5% of the judge's geomeans, and 2.927x (PTX).
 
 A kernel passed by path must expose `run(...)` with the signature above and may expose
 `prepare(...) -> launch`, which is then planned once per workload and only `launch()` is
@@ -167,6 +217,10 @@ timed.
 Head size 128, bf16 activations and an fp32 state; tested with H = 32, 64 and 96, up to
 170001 tokens in one sequence and 300 packed sequences. TIRx requires `H % 8 == 0` and
 `T * H * 128 < 2^31`.
+PTX needs a B300 (sm_103a) and was tested up to 16384 tokens in one sequence and 300 packed
+sequences. It runs H = 64 and 96 on its PTX kernels; other head counts
+(such as H = 32) use the exact token-by-token recurrence, which is 12-20x slower than
+FlashKDA.
 
 ## Hacking example
 

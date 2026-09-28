@@ -1,7 +1,7 @@
 [project]
 name = "kda-for-kda-release"
 version = "0.1.0"
-description = "CuTe DSL and TIRx KDA forward kernels for NVIDIA Blackwell, with a FlashKDA speedup benchmark"
+description = "CuTe DSL, TIRx and static-PTX KDA forward kernels for NVIDIA Blackwell, with a FlashKDA speedup benchmark"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "torch==2.12.1",
@@ -15,6 +15,8 @@ dependencies = [
     "apache-tvm",
     "apache-tvm-ffi",
     "tirx-kernels",
+    # PTX kernel: ptxas >= 13.2 assembles the retained PTX (ISA 9.2) for drivers that cannot JIT it
+    "nvidia-cuda-nvcc>=13.2",
     # Benchmark: FlashKDA baseline (through FLA), FLA reference, CUPTI timer
     "fla-core==0.5.2",
     "flash-kda",
