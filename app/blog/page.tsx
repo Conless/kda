@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { internalPath } from '../internal-path';
 import { BLOG_DESCRIPTION, feedUrl, formatPostDate, postPath, posts } from './posts';
 
 export default function BlogIndex() {
@@ -14,14 +14,14 @@ export default function BlogIndex() {
           <p className="blog-lede">{BLOG_DESCRIPTION}</p>
           <div className="blog-hero-links">
             <a className="text-link" href={feedUrl}>Subscribe via RSS <span aria-hidden="true">↗</span></a>
-            <Link className="text-link" href="/#submit">Request a kernel <span aria-hidden="true">↗</span></Link>
+            <a className="text-link" href={internalPath('/#submit')}>Request a kernel <span aria-hidden="true">↗</span></a>
           </div>
         </div>
       </header>
 
       {latest && (
         <section className="shell blog-featured" aria-label="Latest post">
-          <Link className="featured-card" href={postPath(latest.slug)}>
+          <a className="featured-card" href={internalPath(postPath(latest.slug))}>
             <div className="featured-copy">
               <p className="section-label">LATEST POST</p>
               <p className="post-meta">
@@ -47,7 +47,7 @@ export default function BlogIndex() {
                 ))}
               </div>
             </div>
-          </Link>
+          </a>
         </section>
       )}
 
@@ -62,7 +62,7 @@ export default function BlogIndex() {
             <ol>
               {posts.filter((post) => post.date.startsWith(year)).map((post) => (
                 <li key={post.slug}>
-                  <Link className="archive-row" href={postPath(post.slug)}>
+                  <a className="archive-row" href={internalPath(postPath(post.slug))}>
                     <time dateTime={post.date}>{formatPostDate(post.date, 'short').replace(`, ${year}`, '')}</time>
                     <div>
                       <h3>{post.title}</h3>
@@ -70,7 +70,7 @@ export default function BlogIndex() {
                     </div>
                     <span className="archive-tags">{post.tags.join(' · ')}</span>
                     <span className="archive-arrow" aria-hidden="true">→</span>
-                  </Link>
+                  </a>
                 </li>
               ))}
             </ol>

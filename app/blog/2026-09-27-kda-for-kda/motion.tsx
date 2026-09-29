@@ -233,26 +233,29 @@ export function AccuracyChart() {
         <span>KIMI-LINEAR-48B PREFILL · MATH-500 PROMPT · 96 HEADS</span>
         <span className="chart-live"><i /> CONTEXT <CountUp to={8183} duration={2600} linear /> TOKENS</span>
       </div>
+      <span className="chart-scroll-hint">Swipe to explore the full plots <span aria-hidden="true">→</span></span>
       <div className="accuracy-grid">
         <div className="accuracy-plot">
           <p className="plot-title">Output error vs. context length <span>relative RMSE, %</span></p>
-          <svg viewBox={`0 0 ${width} ${height}`} focusable="false" aria-hidden="true">
-            {[0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7].map((tick) => (
-              <g key={tick}>
-                <path className="grid-line" d={`M${left} ${y(tick)}H${right}`} />
-                <text className="axis-text" x={left - 10} y={y(tick) + 3} textAnchor="end">{tick.toFixed(1)}</text>
+          <div className="plot-scroll" role="region" aria-label="Output error plot, scroll horizontally for full detail" tabIndex={0}>
+            <svg viewBox={`0 0 ${width} ${height}`} focusable="false" aria-hidden="true">
+              {[0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7].map((tick) => (
+                <g key={tick}>
+                  <path className="grid-line" d={`M${left} ${y(tick)}H${right}`} />
+                  <text className="axis-text" x={left - 10} y={y(tick) + 3} textAnchor="end">{tick.toFixed(1)}</text>
+                </g>
+              ))}
+              {[0, 2048, 4096, 6144, 8192].map((tick) => (
+                <text key={tick} className="axis-text" x={x(tick)} y={bottom + 20} textAnchor="middle">{tick ? `${tick / 1024}k` : '0'}</text>
+              ))}
+              {series.map(({ key, data }) => (
+                <path key={key} className={`plot-line line-${key}`} d={linePath(data, x, y)} pathLength={1} />
+              ))}
+              <g className="plot-cursor">
+                <path d={`M${left} ${top}V${bottom}`} />
               </g>
-            ))}
-            {[0, 2048, 4096, 6144, 8192].map((tick) => (
-              <text key={tick} className="axis-text" x={x(tick)} y={bottom + 20} textAnchor="middle">{tick ? `${tick / 1024}k` : '0'}</text>
-            ))}
-            {series.map(({ key, data }) => (
-              <path key={key} className={`plot-line line-${key}`} d={linePath(data, x, y)} pathLength={1} />
-            ))}
-            <g className="plot-cursor">
-              <path d={`M${left} ${top}V${bottom}`} />
-            </g>
-          </svg>
+            </svg>
+          </div>
           <div className="chart-legend">
             {series.map(({ key, name }) => (
               <span key={key}><i className={`swatch swatch-${key}`} /> {name}</span>
@@ -399,34 +402,39 @@ export function AblationCharts() {
         <span>SAME B300 · SAME 14-HOUR BUDGET · TWO STRATEGIES</span>
         <span className="chart-live"><i /> T + <CountUp to={14} duration={3000} linear /> H</span>
       </div>
+      <span className="chart-scroll-hint">Swipe to explore the full plots <span aria-hidden="true">→</span></span>
       <div className="ablation-grid">
         <div>
           <p className="plot-title">Best speedup on the evaluation shape</p>
-          <svg viewBox={`0 0 ${width} ${height}`} focusable="false" aria-hidden="true">
-            {axes([0.4, 0.8, 1.2, 1.6, 2.0], ySpeed, (tick) => `${tick.toFixed(1)}×`)}
-            <path className="baseline-line" d={`M${left} ${ySpeed(1)}H${right}`} />
-            <text className="axis-text baseline-text" x={left + 8} y={ySpeed(1) - 7}>FlashKDA = 1.0×</text>
-            <path className="plot-line line-focus step-line" d={stepPath(speedupFocused, x, ySpeed)} pathLength={1} />
-            <path className="plot-line line-all step-line" d={stepPath(speedupAllShapes, x, ySpeed)} pathLength={1} />
-            {speedupFocused.map(([hours, value]) => (
-              <circle key={`f${hours}`} className="plot-dot dot-focus" cx={x(hours)} cy={ySpeed(value)} r={3.4} style={{ '--t': hours / 14 } as CSSProperties} />
-            ))}
-            {speedupAllShapes.map(([hours, value]) => (
-              <circle key={`a${hours}`} className="plot-dot dot-all" cx={x(hours)} cy={ySpeed(value)} r={3.4} style={{ '--t': hours / 14 } as CSSProperties} />
-            ))}
-            <text className="end-label label-focus" x={x(last(speedupFocused)[0]) + 10} y={ySpeed(last(speedupFocused)[1]) + 4}>1.85×</text>
-            <text className="end-label label-all" x={x(last(speedupAllShapes)[0]) + 10} y={ySpeed(last(speedupAllShapes)[1]) + 4}>1.01×</text>
-          </svg>
+          <div className="plot-scroll" role="region" aria-label="Speedup plot, scroll horizontally for full detail" tabIndex={0}>
+            <svg viewBox={`0 0 ${width} ${height}`} focusable="false" aria-hidden="true">
+              {axes([0.4, 0.8, 1.2, 1.6, 2.0], ySpeed, (tick) => `${tick.toFixed(1)}×`)}
+              <path className="baseline-line" d={`M${left} ${ySpeed(1)}H${right}`} />
+              <text className="axis-text baseline-text" x={left + 8} y={ySpeed(1) - 7}>FlashKDA = 1.0×</text>
+              <path className="plot-line line-focus step-line" d={stepPath(speedupFocused, x, ySpeed)} pathLength={1} />
+              <path className="plot-line line-all step-line" d={stepPath(speedupAllShapes, x, ySpeed)} pathLength={1} />
+              {speedupFocused.map(([hours, value]) => (
+                <circle key={`f${hours}`} className="plot-dot dot-focus" cx={x(hours)} cy={ySpeed(value)} r={3.4} style={{ '--t': hours / 14 } as CSSProperties} />
+              ))}
+              {speedupAllShapes.map(([hours, value]) => (
+                <circle key={`a${hours}`} className="plot-dot dot-all" cx={x(hours)} cy={ySpeed(value)} r={3.4} style={{ '--t': hours / 14 } as CSSProperties} />
+              ))}
+              <text className="end-label label-focus" x={x(last(speedupFocused)[0]) + 10} y={ySpeed(last(speedupFocused)[1]) + 4}>1.85×</text>
+              <text className="end-label label-all" x={x(last(speedupAllShapes)[0]) + 10} y={ySpeed(last(speedupAllShapes)[1]) + 4}>1.01×</text>
+            </svg>
+          </div>
         </div>
         <div>
           <p className="plot-title">Cumulative output tokens</p>
-          <svg viewBox={`0 0 ${width} ${height}`} focusable="false" aria-hidden="true">
-            {axes([0, 1, 2, 3], yTokens, (tick) => `${tick}M`)}
-            <path className="plot-line line-focus" d={linePath(tokensFocused, x, yTokens)} pathLength={1} />
-            <path className="plot-line line-all" d={linePath(tokensAllShapes, x, yTokens)} pathLength={1} />
-            <text className="end-label label-focus" x={x(last(tokensFocused)[0]) + 8} y={yTokens(last(tokensFocused)[1]) + 4}>2.74M</text>
-            <text className="end-label label-all" x={x(last(tokensAllShapes)[0]) + 8} y={yTokens(last(tokensAllShapes)[1]) + 4}>1.67M</text>
-          </svg>
+          <div className="plot-scroll" role="region" aria-label="Output tokens plot, scroll horizontally for full detail" tabIndex={0}>
+            <svg viewBox={`0 0 ${width} ${height}`} focusable="false" aria-hidden="true">
+              {axes([0, 1, 2, 3], yTokens, (tick) => `${tick}M`)}
+              <path className="plot-line line-focus" d={linePath(tokensFocused, x, yTokens)} pathLength={1} />
+              <path className="plot-line line-all" d={linePath(tokensAllShapes, x, yTokens)} pathLength={1} />
+              <text className="end-label label-focus" x={x(last(tokensFocused)[0]) + 8} y={yTokens(last(tokensFocused)[1]) + 4}>2.74M</text>
+              <text className="end-label label-all" x={x(last(tokensAllShapes)[0]) + 8} y={yTokens(last(tokensAllShapes)[1]) + 4}>1.67M</text>
+            </svg>
+          </div>
         </div>
       </div>
       <div className="chart-legend">

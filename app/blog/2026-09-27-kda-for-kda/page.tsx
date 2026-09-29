@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
+import { internalPath } from '../../internal-path';
 import {
   AblationCharts,
   AccuracyChart,
@@ -270,7 +270,7 @@ export default function KdaForKdaPost() {
 
       <header className="post-hero shell" id="top">
         <div className="post-hero-copy">
-          <div className="eyebrow"><span /> <Link href="/blog/">KDA Blog</Link> · <time dateTime={post.date}>{formatPostDate(post.date)}</time></div>
+          <div className="eyebrow"><span /> <a href={internalPath('/blog/')}>KDA Blog</a> · <time dateTime={post.date}>{formatPostDate(post.date)}</time></div>
           <h1 className="post-title">
             KDA<sup>2</sup>
             <em><strong>K</strong>ernel <strong>D</strong>esign <strong>A</strong>gents (KDA) optimize <strong>K</strong>imi <strong>D</strong>elta <strong>A</strong>ttention (KDA)</em>
@@ -586,12 +586,12 @@ export default function KdaForKdaPost() {
           <p>Both kernels, CuTe-DSL and TIRx, are open source and pass the hardened acceptance suite described above.</p>
           <a className="button button-acid" href={RELEASE_URL}>Get the kernels <span aria-hidden="true">↗</span></a>
           <a className="final-secondary" href={HUMANIZE_URL}>Explore Humanize <span aria-hidden="true">→</span></a>
-          <Link className="final-secondary" href="/#submit">Request a kernel from KDA <span aria-hidden="true">→</span></Link>
+          <a className="final-secondary" href={internalPath('/#submit')}>Request a kernel from KDA <span aria-hidden="true">→</span></a>
         </div>
       </section>
 
       <nav className="post-endnav shell" aria-label="Blog navigation">
-        <Link className="text-link" href="/blog/"><span aria-hidden="true">←</span> All posts</Link>
+        <a className="text-link" href={internalPath('/blog/')}><span aria-hidden="true">←</span> All posts</a>
         <a className="text-link" href={feedUrl}>Subscribe via RSS <span aria-hidden="true">↗</span></a>
       </nav>
     </div>

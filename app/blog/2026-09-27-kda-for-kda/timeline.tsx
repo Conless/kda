@@ -66,7 +66,8 @@ export function ProgressTimeline() {
             <span><i className="progress-swatch progress-int21" /> INT21 reference</span>
           </div>
         </div>
-        <div className="progress-scroll">
+        <span className="chart-scroll-hint">Swipe to see the full timeline <span aria-hidden="true">→</span></span>
+        <div className="progress-scroll" role="region" aria-label="Timeline chart, scroll horizontally to see all dates" tabIndex={0}>
           <svg viewBox="0 0 1090 392" role="img" aria-label="KDA best rises from 1.61 times on July 21 to 2.96 times on September 12. Dashed arrows mark Humanize2 at 2.45 times on August 14; TIRx at 2.54 times on August 30, 2.93 times on September 2, and 2.96 times on September 12; and CAKE plus KDA at 2.56 times on September 1 and CAKE at 2.94 times on September 6. INT21 is 1.5 times on June 16.">
             <defs>
               <marker id="progress-humanize-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z" fill="#c7ff3d" /></marker>

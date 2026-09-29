@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
+import { internalPath } from '../internal-path';
 import { BLOG_DESCRIPTION, BLOG_TITLE, blogUrl, feedUrl, siteUrl } from './posts';
 import './blog.css';
 
@@ -35,15 +35,15 @@ export default function BlogLayout({ children }: Readonly<{ children: React.Reac
   return (
     <>
       <nav className="nav shell" aria-label="Primary navigation">
-        <Link className="brand" href="/" aria-label="Kernel Design Agents home">
+        <a className="brand" href={internalPath('/')} aria-label="Kernel Design Agents home">
           <span className="brand-mark" aria-hidden="true">KDA</span>
           <span>Kernel Design <b>Agents</b></span>
-        </Link>
+        </a>
         <div className="nav-links">
-          <Link href="/#process">How it works</Link>
-          <Link href="/#achievements">Achievements</Link>
-          <Link href="/#faq">FAQ</Link>
-          <Link href="/blog/">Blog</Link>
+          <a href={internalPath('/#process')}>How it works</a>
+          <a href={internalPath('/#achievements')}>Achievements</a>
+          <a href={internalPath('/#faq')}>FAQ</a>
+          <a href={internalPath('/blog/')}>Blog</a>
           <a className="nav-cta" href={REPOSITORY_URL}>View GitHub <span aria-hidden="true">↗</span></a>
         </div>
       </nav>
@@ -51,10 +51,10 @@ export default function BlogLayout({ children }: Readonly<{ children: React.Reac
       <main className="blog">{children}</main>
 
       <footer className="footer shell">
-        <Link className="brand" href="/" aria-label="Kernel Design Agents home">
+        <a className="brand" href={internalPath('/')} aria-label="Kernel Design Agents home">
           <span className="brand-mark" aria-hidden="true">KDA</span>
           <span>Kernel Design <b>Agents</b></span>
-        </Link>
+        </a>
         <p>An agentic-driven CUDA project</p>
         <div>
           <a href={REPOSITORY_URL}>GitHub</a>
