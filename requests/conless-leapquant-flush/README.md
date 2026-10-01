@@ -10,7 +10,7 @@ stored at 1.19 bytes per element — four fp16 Compensator Tokens (a rank-4 part
 last 16 rank-1 updates are buffered in bf16. A decode step then reads 27.7 KB and writes only its buffered update.
 At the end of each 16-token window a **flush** materialises the state and re-quantizes it for the next window. The
 flush is the kernel requested here: at batch 256 it takes 0.247 ms per layer with every program due, against about
-0.06 ms of memory traffic, and it is what caps the amortised decode speed-up over the stock fp32 kernel at 2.52×
+0.06 ms of memory traffic, and it is what caps the amortised decode speed-up over the stock fp32 kernel at 2.65×
 (3.0× with a flush at its memory bound).
 
 ## Contract and Baseline
