@@ -10,7 +10,7 @@ stored at 1.19 bytes per element — four fp16 Compensator Tokens (a rank-4 part
 last 16 rank-1 updates are buffered in bf16 together with the per-channel decay of the step that produced them. The
 **decode step** requested here computes each token's output and its new rank-1 update from that representation,
 reading 32.6 KB per (sequence, head) and writing only the new update; it never materialises or writes back the state.
-This is the Kimi variant of `requests/conless-leapquant-step/`; the window-boundary flush is
+This is the Kimi variant of `requests/conless-leapquant-gdn-step/`; the window-boundary flush is
 `requests/conless-leapquant-kda-flush/`. At batch 256 the baseline takes 0.068 ms per layer against 0.044 ms for its
 memory traffic.
 

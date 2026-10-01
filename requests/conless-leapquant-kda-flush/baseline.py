@@ -26,7 +26,7 @@ SS, OFF = 33 * V * K, 12288                   # pool geometry in fp32 words: slo
 @tilelang.jit(pass_configs={"tl.disable_thread_storage_sync": True})
 def make_flush_kernel(NS, HV, K, V, L, SS, R=4, ITERS=1, SMS=148, NCG=3, MAXIT=128, PROF=False, PAD=8, KDA=False, GB16=True, PROFIT=False, DROPLO=False, MMT="bf16", ABL="", PNMIN=1e-20, GRAM16=False, NSTAGE=0, NMAX=0, KEXACT=True, **_ignored):
     """TileLang generator of the flush kernel (KDA=True: the per-channel gate of this request; KDA=False is the scalar-gate
-    variant of requests/conless-leapquant-flush).  The rebuilt state B (state minus the old rank-4 part) lives in shared
+    variant of requests/conless-leapquant-gdn-flush).  The rebuilt state B (state minus the old rank-4 part) lives in shared
     memory as fp16 for the subspace iteration; the old rank-4 part is carried algebraically; the residual is accumulated
     in fp32 from the stage (see KEXACT below) and quantised row-wise.  Keyword switches other than the shapes are
     ablations (defaults are the deployed configuration)."""

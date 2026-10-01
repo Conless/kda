@@ -1,6 +1,6 @@
 {
-  "name": "leapquant_flush_r4_int8_h32_v128_k128",
-  "op_type": "leapquant_flush",
+  "name": "leapquant_gdn_flush_r4_int8_h32_v128_k128",
+  "op_type": "leapquant_gdn_flush",
   "description": "LeapQuant window flush (arXiv:2609.38166) for gated-delta-rule linear attention decode: at the end of a 16-token window, rebuild each head's V x K fp32 recurrent state from its quantized checkpoint (4 fp16 Compensator Tokens + smoothed int8 residual) and the window's 16 buffered rank-1 updates, then re-quantize it (one round of subspace iteration for the new Compensator Tokens, smoothing scales and int8 codes for the residual). Correctness is judged on the decoded state (see the request README), not elementwise.",
   "axes": {
     "batch_size": {

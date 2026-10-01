@@ -9,7 +9,7 @@ memory bandwidth, not arithmetic.
 stored at 1.19 bytes per element — four fp16 Compensator Tokens (a rank-4 part) plus a smoothed int8 residual — and the
 last 16 rank-1 updates are buffered in bf16 together with the per-channel decay of the step that produced them. At the
 end of each 16-token window a **flush** materialises the state and re-quantizes it for the next window. This is the
-Kimi variant of `requests/conless-leapquant-flush/` (same checkpoint, same algorithm, a per-channel instead of a scalar
+Kimi variant of `requests/conless-leapquant-gdn-flush/` (same checkpoint, same algorithm, a per-channel instead of a scalar
 gate). At batch 256 the baseline takes 0.320 ms per layer with every program due, against about 0.073 ms of memory
 traffic; the Kimi decode step is in `requests/conless-leapquant-kda-step/`.
 

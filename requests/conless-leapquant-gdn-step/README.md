@@ -10,7 +10,7 @@ stored at 1.19 bytes per element — four fp16 Compensator Tokens (a rank-4 part
 last 16 rank-1 updates are buffered in bf16. The **decode step** requested here computes each token's output and its
 new rank-1 update from that representation, reading 27.8 KB per (sequence, head) and writing only the new update; it
 never materialises or writes back the state (the window-boundary flush is a separate request,
-`requests/conless-leapquant-flush/`). At batch 256 the baseline takes 0.0449 ms per layer against 0.0367 ms for its
+`requests/conless-leapquant-gdn-flush/`). At batch 256 the baseline takes 0.0449 ms per layer against 0.0367 ms for its
 memory traffic at the bandwidth a large read stream reaches on the same GPU.
 
 ## Contract and Baseline
@@ -77,8 +77,8 @@ Environment used for the results below: Python 3.12, `torch==2.13.0+cu130`, `til
 
 ```bash
 python -m pip install torch==2.13.0 tilelang==0.1.12
-CUDA_VISIBLE_DEVICES=0 python requests/conless-leapquant-step/benchmark.py                    # baseline
-CUDA_VISIBLE_DEVICES=0 python requests/conless-leapquant-step/benchmark.py --impl my_step.py  # a candidate
+CUDA_VISIBLE_DEVICES=0 python requests/conless-leapquant-gdn-step/benchmark.py                    # baseline
+CUDA_VISIBLE_DEVICES=0 python requests/conless-leapquant-gdn-step/benchmark.py --impl my_step.py  # a candidate
 ```
 
 Correctness runs the functional form

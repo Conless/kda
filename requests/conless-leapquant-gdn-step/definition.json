@@ -1,6 +1,6 @@
 {
-  "name": "leapquant_step_r4_int8_h32_v128_k128",
-  "op_type": "leapquant_step",
+  "name": "leapquant_gdn_step_r4_int8_h32_v128_k128",
+  "op_type": "leapquant_gdn_step",
   "description": "LeapQuant decode step (arXiv:2609.38166) of a gated-delta-rule linear-attention layer: the recurrent state is the window's quantized checkpoint (4 fp16 Compensator Tokens + smoothed int8 residual) plus up to 15 buffered rank-1 updates; the step computes this token's output and its new rank-1 update from them without materialising or writing back the state. Correctness is judged per head with a relative tolerance (see the request README).",
   "axes": {
     "batch_size": {

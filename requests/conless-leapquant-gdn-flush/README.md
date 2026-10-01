@@ -91,8 +91,8 @@ implementation, see above). Environment used for the results below: Python 3.12,
 
 ```bash
 python -m pip install torch==2.13.0 tilelang==0.1.12
-CUDA_VISIBLE_DEVICES=0 python requests/conless-leapquant-flush/benchmark.py                     # baseline
-CUDA_VISIBLE_DEVICES=0 python requests/conless-leapquant-flush/benchmark.py --impl my_flush.py  # a candidate
+CUDA_VISIBLE_DEVICES=0 python requests/conless-leapquant-gdn-flush/benchmark.py                     # baseline
+CUDA_VISIBLE_DEVICES=0 python requests/conless-leapquant-gdn-flush/benchmark.py --impl my_flush.py  # a candidate
 ```
 
 Correctness runs the functional form `run(codes, s_k, s_v, u, q, kbuf, ubuf, w, p, q0)` on every batch size.
