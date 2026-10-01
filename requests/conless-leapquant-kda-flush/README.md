@@ -10,7 +10,7 @@ stored at 1.19 bytes per element — four fp16 Compensator Tokens (a rank-4 part
 last 16 rank-1 updates are buffered in bf16 together with the per-channel decay of the step that produced them. At the
 end of each 16-token window a **flush** materialises the state and re-quantizes it for the next window. This is the
 Kimi variant of `requests/conless-leapquant-flush/` (same checkpoint, same algorithm, a per-channel instead of a scalar
-gate). At batch 256 the baseline takes 0.266 ms per layer with every program due, against about 0.073 ms of memory
+gate). At batch 256 the baseline takes 0.320 ms per layer with every program due, against about 0.073 ms of memory
 traffic; the Kimi decode step is in `requests/conless-leapquant-kda-step/`.
 
 ## Contract and Baseline
@@ -32,40 +32,46 @@ One *program* is one (sequence, head). All shapes below have leading `[batch_siz
   `s_v[v] = max_k |E[v, k]| / s_k[k]`; `codes = round(127 · E / (s_k s_v))`.
 - Outputs: the new `codes`, `s_k`, `s_v`, `u`, `q` with the input dtypes and shapes.
 - Domain: scales positive, `|S|` below 1e4, any batch up to 512 sequences per call.
-- Fixed: the checkpoint format and the algorithm. Free: the order of operations, the precision of every
-  intermediate, tensor cores or not, thread and memory layout — anything that meets the criterion below.
+- Fixed: the checkpoint format and the algorithm. Free: the order of operations, the precision of intermediates,
+  tensor cores or not, thread and memory layout — anything that keeps the checkpoint within 1 % of the reference's
+  accuracy on every head, see the criterion below.
 - Baseline (`baseline.py`): our TileLang kernel for sm_100 (the generator of the GDN flush request built with
   `KDA=True`), original work of this request's authors, first published here. Same structure as the GDN flush; the
-  decayed keys enter the rebuild as a bf16 hi + lo pair and the old Compensator Tokens are pre-multiplied by
-  `exp(pcum)` and stored back in fp16.
+  decayed keys enter the rebuild as a bf16 hi + lo pair; the subspace iteration runs on an fp16 copy of the rebuilt
+  state, while the residual is accumulated in fp32 from the checkpoint, the buffered updates and both rank-4 parts
+  (a second dequantisation pass) and staged for the quantisation as fp16 with a power-of-two scale per 32 × 64 block.
 - Hardware: NVIDIA B200.
 
 ## Correctness criterion
 
-As in the GDN flush request, the decoded state is judged, not the codes. For every head, with `S` the exactly rebuilt
-(fp64) state and `err = mean |decode(checkpoint) − S|` over the head's 128 × 128 elements:
+The same criterion as the GDN flush request: the decoded state is judged, not the codes. For every head, with `S` the
+exactly rebuilt (fp64) state and `err = mean |decode(checkpoint) − S|` over the head's 128 × 128 elements:
 
-- `err_candidate ≤ 1.10 · err_reference` if `err_reference ≥ 1e-4 · mean |S|`;
+- `err_candidate ≤ 1.01 · err_reference` if `err_reference ≥ 1e-4 · mean |S|`;
 - `err_candidate ≤ 1e-3 · mean |S|` otherwise (a head the format captures almost exactly);
 - all outputs finite and codes in `[−127, 127]`.
 
-The bound is 1.10 rather than the GDN request's 1.01 because the deployed Kimi kernel stores the decayed old
-Compensator Tokens in fp16 before the rebuild. That costs about 1 % on ordinary heads and 7–8 % on heads whose state
-is tiny (fp16 loses precision near its subnormal range). `benchmark.py` applies the criterion to three inputs per batch
-size: a synthetic checkpoint with edge-case heads (rank 1, rank 2, all zero, tiny, huge, a hot row, a checkpoint decayed
-to nothing, channels that never decay), the checkpoint the reference produced from it (a second window), and
-unstructured in-domain random tensors. Measured worst ratios (structured / second window / random):
+`benchmark.py` applies the criterion to three inputs per batch size: a synthetic checkpoint with edge-case heads
+(rank 1, rank 2, all zero, tiny, huge, a hot row, a checkpoint decayed to nothing, channels that never decay), the
+checkpoint the reference produced from it (a second window), and unstructured in-domain random tensors. Measured
+worst ratios over batch sizes 64, 256 and 512:
 
-| implementation | worst ratio | verdict |
+| implementation | structured / second window / random | verdict |
 | --- | --- | --- |
-| the baseline | 1.071 / 1.005 / 1.013 | pass |
-| the reference with the decayed old Compensator Tokens rounded to fp16 | 1.042 / 1.002 / 1.002 | pass |
-| the state rounded to fp16 before compression | 1.043 / 1.004 / 1.012 | pass |
-| the residual rounded to bf16 | 1.039 / 1.037 / 1.034 | pass |
+| the reference computed in fp64 | 1.0000 / 1.0000 / 1.0000 | pass |
+| the baseline | 1.0016 / 1.0017 / 1.0026 | pass |
+| our previous kernel (decayed old Compensator Tokens in fp16, residual from the fp16 state) | 1.075 / 1.005 / 1.013 | fail |
+| the decayed old Compensator Tokens rounded to fp16 | 1.044 / 1.002 / 1.002 | fail |
+| the state rounded to fp16 before compression | 1.045 / 1.004 / 1.012 | fail |
+| the residual rounded to fp16 | 1.017 / 1.002 / 1.002 | fail |
+| the residual rounded to bf16 | 1.039 / 1.037 / 1.034 | fail |
+| the decayed buffered keys rounded to bf16 | over the absolute cap / 1.109 / 1.138 | fail |
 | the state rounded to bf16 | over the absolute cap / 1.161 / 1.399 | fail |
-| the state in fp8 (e4m3) | over the absolute cap / 8.5 / 13.2 | fail |
-| buffered updates not decayed | over the absolute cap / 678 / 1870 | fail |
 | codes rounded toward zero instead of to nearest | 2.0 / 2.0 / 2.0 | fail |
+
+The fp16 variants fail here although they pass the GDN request: the per-channel log-gate (down to −20 in the random
+inputs) leaves some key channels of a head many orders of magnitude below the rest, and on the tiny head the whole state
+sits near fp16's subnormal range.
 
 ## Workloads
 
@@ -102,12 +108,12 @@ synchronisation, JIT or autotuning inside the call.
 
 | batch_size | programs | worst-head error ratio vs reference (structured / second window / random) | correctness | all-due latency (ms) | memory bound (ms) |
 | --- | --- | --- | --- | --- | --- |
-| 16 | 512 | 1.0782 / 1.0049 / 1.0147 | PASS | 0.0275 | 0.005 |
-| 32 | 1024 | 1.0750 / 1.0047 / 1.0156 | PASS | 0.0422 | 0.009 |
-| 64 | 2048 | 1.0705 / 1.0046 / 1.0127 | PASS | 0.0775 | 0.018 |
-| 128 | 4096 | 1.0766 / 1.0047 / 1.0131 | PASS | 0.1458 | 0.037 |
-| 256 | 8192 | 1.0750 / 1.0045 / 1.0122 | PASS | 0.2656 | 0.073 |
-| 512 | 16384 | 1.0738 / 1.0045 / 1.0119 | PASS | 0.5035 | 0.147 |
+| 16 | 512 | 1.0023 / 1.0020 / 1.0030 | PASS | 0.0318 | 0.005 |
+| 32 | 1024 | 1.0019 / 1.0019 / 1.0028 | PASS | 0.0518 | 0.009 |
+| 64 | 2048 | 1.0016 / 1.0017 / 1.0026 | PASS | 0.0955 | 0.018 |
+| 128 | 4096 | 1.0017 / 1.0017 / 1.0024 | PASS | 0.1750 | 0.037 |
+| 256 | 8192 | 1.0015 / 1.0015 / 1.0022 | PASS | 0.3198 | 0.073 |
+| 512 | 16384 | 1.0016 / 1.0016 / 1.0022 | PASS | 0.6069 | 0.147 |
 
 The memory bound is 55.1 KB per program (checkpoint, window and gate history read; checkpoint written and the window
 reset) at 6.3 TB/s, the read + write bandwidth the stock vLLM fp32 decode kernel reaches on this GPU at batch 256.

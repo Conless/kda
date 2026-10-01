@@ -22,7 +22,7 @@ from torch.profiler import profile, ProfilerActivity
 
 HERE = Path(__file__).resolve().parent
 HV, K, V, L, R, QMAX = 32, 128, 128, 16, 4, 127.0
-REL_TOL, FLOOR, CAP = 0.10, 1e-4, 1e-3       # 10 % more error than the reference; heads whose reference error is below 1e-4 |S| are held to 1e-3 |S|
+REL_TOL, FLOOR, CAP = 0.01, 1e-4, 1e-3       # 1 % more error than the reference; heads whose reference error is below 1e-4 |S| are held to 1e-3 |S|
 NSETS, WARMUP, ITERS = 8, 4, 16
 KB_PER_PROGRAM = 19 + 8 + 4.5 + 19 + 4.6    # checkpoint read + update buffer and gate history read + checkpoint write + resets (gate history to 1)
 REF_TBPS = 6.3                               # read + write bandwidth of the stock vLLM fp32 decode kernel on B200 at batch 256 (the memory-bound yardstick)

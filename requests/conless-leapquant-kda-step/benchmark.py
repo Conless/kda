@@ -5,13 +5,16 @@
   python benchmark.py --impl my_step.py    # a candidate exposing run(...) and, for timing, Pool / step_inplace
 
 Correctness (functional form `run`, every batch size in workloads.jsonl, three inputs each: a synthetic state with edge-case
-heads, the step after it (the first step's update appended to the buffer), and unstructured in-domain random tensors):
-    o, k_row, u_row : per (sequence, head), with M = the same expression evaluated on the absolute values of every term
-                      (the usual forward-error scale: o and u are sums that can cancel, so their own size is not a usable
-                      denominator):  ||x - ref||_2 <= REL_L2 * ||M||_2  and  |x - ref| <= REL_MAX * M  elementwise
-    g_row           : per element relative error <= REL_G (fp16 storage of a decay factor in (0, 1])
-    w_new, pcum_new : |error| <= REL_SCALAR * (|reference| + 1)
-The order of operations and the precision of intermediates are free.  Timing (deployment form `step_inplace` on a
+heads, the step after it (the first step's update appended to the buffer), and unstructured in-domain random tensors), against
+the definition's formula evaluated in fp64 (`exact`), element by element:
+    o, k_row, u_row : |x - exact| <= half a bf16 step + TAU * M, with M = the same expression evaluated on the absolute values of
+                      every term (the forward-error scale: o and u are sums that can cancel, so their own size is not a usable
+                      denominator); an element whose terms are all zero must come out zero
+    g_row           : |x - exact| <= half an fp16 step + TAU * |exact|
+    w_new           : equal;  pcum_new : |x - exact| <= REL_SCALAR * (|exact| + 1)
+Half a step is the rounding of the output itself; TAU is 200x what fp32 arithmetic in any order costs (the fp32 reference:
+5e-8 M), so every intermediate has to carry about fp32 precision -- one rounded to bf16, fp16 or tf32 fails.
+The order of operations is free.  Timing (deployment form `step_inplace` on a
 caller-owned pool, every sequence decoding, buffer filled to entry 1): CUDA kernel time from the torch profiler, L2-cold --
 NSETS disjoint slot sets are used in rotation so no call finds its checkpoints in L2.
 """
@@ -22,7 +25,7 @@ from torch.profiler import profile, ProfilerActivity
 
 HERE = Path(__file__).resolve().parent
 H, K, V, L, R = 32, 128, 128, 16, 4
-REL_L2, REL_MAX, REL_G, REL_SCALAR = 2.5e-3, 1.5e-2, 2e-3, 1e-5
+TAU, REL_SCALAR = 1e-5, 1e-5
 QMAX = 127.0
 NSETS, WARMUP, ITERS = 8, 6, 32
 READ_B = V * K + (K + V) * 4 + R * (K + V) * 2 + L * (K + V) * 2 + L * K * 2 + L * 4 + K * 4 + (2 * K + V) * 2 + K * 2   # + gate history, cumulative gate, gate input
@@ -99,50 +102,57 @@ def random_inputs(bs, dev, seed=1):
             rn(bs, H, K, dt=torch.bfloat16), (rn(bs, H) * 2).to(torch.bfloat16), A_log, dt_bias)
 
 
-def magnitudes(inp):
-    """|A||x|-style scale of o, k_row and u_row: the reference's expressions with every term replaced by its absolute value."""
+def exact(inp, absval=False):
+    """The definition's formula in fp64 (beta rounded to bf16 as the model carries it).  absval=True: the same expression with every
+    term replaced by its absolute value (the scale M of o, k_row and u_row)."""
     codes, s_k, s_v, u, q, kbuf, ubuf, gbuf, w, pcum, h, qx, kx, vx, a, b, A_log, dt_bias = inp
+    d = torch.float64; f = torch.abs if absval else (lambda t: t)
     Kd = codes.shape[-1]; Ln = kbuf.shape[-2]
-    kf = kx.float(); qf = qx.float()
+    kf = kx.to(d); qf = qx.to(d)
     kn = kf * torch.rsqrt((kf * kf).sum(-1, keepdim=True) + 1e-6); qn = qf * torch.rsqrt((qf * qf).sum(-1, keepdim=True) + 1e-6) * Kd ** -0.5
-    x = a.float() + dt_bias; g = -torch.exp(A_log)[:, None] * torch.where(x <= 20.0, torch.log1p(torch.exp(x)), x)
-    en = torch.exp(g); pc = torch.exp(pcum + g); beta = torch.sigmoid(b.float()).to(torch.bfloat16).float()
+    x = a.to(d) + dt_bias.to(d); g = -torch.exp(A_log.to(d))[:, None] * torch.where(x <= 20.0, torch.log1p(torch.exp(x)), x)
+    en = torch.exp(g); gn = pcum.to(d) + g; pc = torch.exp(gn); beta = torch.sigmoid(b.float()).to(torch.bfloat16).to(d)
     j = torch.arange(Ln, device=w.device)
-    e = torch.where((j[:, None] < h[..., None, None]), gbuf.float(), torch.ones_like(gbuf, dtype=torch.float32))
+    e = torch.where((j[:, None] < h[..., None, None]), gbuf.to(d), torch.ones_like(gbuf, dtype=d))
     after = torch.flip(torch.cumprod(torch.flip(e, [-2]), -2), [-2]); after = torch.cat([after[..., 1:, :], torch.ones_like(after[..., :1, :])], -2)
     D = en[..., None, :] * after * (j[:, None] < h[..., None, None])
-    s0a = torch.einsum("bhrv,bhrk->bhvk", q.float().abs(), u.float().abs()) + (codes.float() * (s_k / QMAX)[..., None, :] * s_v[..., :, None]).abs()
-    sa = s0a * pc[..., None, :] + torch.einsum("bhj,bhjv,bhjk->bhvk", w.abs(), ubuf.float().abs(), (kbuf.float() * D).abs())
-    ua = beta[..., None] * (vx.float().abs() + torch.einsum("bhvk,bhk->bhv", sa, kn.abs()))
-    oa = torch.einsum("bhvk,bhk->bhv", sa, qn.abs()) + (kn.abs() * qn.abs()).sum(-1, keepdim=True) * ua
-    return oa, kn.abs(), ua
+    s0 = f(torch.einsum("bhrv,bhrk->bhvk", q.to(d), u.to(d))) if not absval else torch.einsum("bhrv,bhrk->bhvk", q.to(d).abs(), u.to(d).abs())
+    s0 = s0 + f(codes.to(d) * (s_k.to(d) / QMAX)[..., None, :] * s_v.to(d)[..., :, None])
+    s = s0 * pc[..., None, :] + torch.einsum("bhj,bhjv,bhjk->bhvk", f(w.to(d)), f(ubuf.to(d)), f(kbuf.to(d) * D))
+    kk, qq = f(kn), f(qn)
+    upd = beta[..., None] * (f(vx.to(d)) + (1 if absval else -1) * torch.einsum("bhvk,bhk->bhv", s, kk))
+    y = torch.einsum("bhvk,bhk->bhv", s, qq) + (kk * qq).sum(-1, keepdim=True) * upd
+    return y, kk, upd, en, gn
 
 
-def judge(out, ref, inp):
-    worst = 0.0; ok = True
-    for x, y, m in zip(out[:3], ref[:3], magnitudes(inp)):
-        x, y = x.float(), y.float(); d = x - y
-        l2 = d.flatten(2).norm(dim=-1) / m.flatten(2).norm(dim=-1).clamp_min(1e-30)
-        mx = (d.abs() / m.clamp_min(1e-30)).flatten(2).amax(-1)
-        zero = m.flatten(2).amax(-1) == 0                           # a head whose terms are all zero must come out all zero
-        r = torch.where(zero, (x.flatten(2).abs().amax(-1) > 0).float() * 1e9, torch.maximum(l2 / REL_L2, mx / REL_MAX))
-        ok &= bool((r <= 1).all()) and bool(torch.isfinite(x).all())
+def half_step(t, mant, emin):
+    """Half the spacing of a float format with `mant` stored mantissa bits (smallest exponent emin) at |t|."""
+    _, ex = torch.frexp(t.abs())
+    return torch.ldexp(torch.full_like(t, 0.5), torch.clamp(ex.int() - 1 - mant, min=emin - mant))
+
+
+def judge(out, inp):
+    """(ok, worst error / tolerance): error beyond the output's own rounding, divided by the allowance, maximised over elements."""
+    ex = exact(inp); mags = exact(inp, absval=True); worst = 0.0; ok = all(bool(torch.isfinite(t.float()).all()) for t in out)
+    for x, e, m in zip(out[:3], ex[:3], mags[:3]):
+        x = x.double()
+        r = ((x - e).abs() - half_step(torch.maximum(x.abs(), e.abs()), 7, -126)) / (TAU * m)
+        r = torch.where(m == 0, (x != 0).double() * 1e9, r.clamp_min(0))       # all terms zero: the output must be zero
         worst = max(worst, r.max().item())
-    x, y = out[3].float(), ref[3].float()
-    e = ((x - y).abs() / y.abs().clamp_min(1e-30)).max().item(); ok &= e <= REL_G and bool(torch.isfinite(x).all()); worst = max(worst, e / REL_G)
-    for x, y in zip(out[4:], ref[4:]):
-        x, y = x.float(), y.float()
-        e = ((x - y).abs() / (y.abs() + 1)).max().item(); ok &= e <= REL_SCALAR; worst = max(worst, e / REL_SCALAR)
-    return ok, worst
+    x = out[3].double(); e = ex[3]
+    worst = max(worst, (((x - e).abs() - half_step(torch.maximum(x.abs(), e.abs()), 10, -14)) / (TAU * e.abs())).clamp_min(0).max().item())
+    if not torch.equal(out[4].float(), torch.where(torch.arange(out[4].shape[-1], device=out[4].device) == inp[10][..., None].long(), 1.0, inp[8].float())):
+        worst = max(worst, 1e9)
+    worst = max(worst, ((out[5].double() - ex[4]).abs() / (REL_SCALAR * (ex[4].abs() + 1))).max().item())
+    return ok and worst <= 1, worst
 
 
 def check(bs, impl, ref_run, dev):
-    first = structured_inputs(bs, dev, seed=bs); r1 = ref_run(*[t.clone() for t in first])
+    first = structured_inputs(bs, dev, seed=bs); r1 = ref_run(*[t.clone() for t in first])     # the reference's update seeds the next step
     res = []
-    for inp, ref in ((first, r1), (next_step(first, r1, dev, bs + 1), None), (random_inputs(bs, dev, seed=bs + 2), None)):
-        ref = ref_run(*[t.clone() for t in inp]) if ref is None else ref
+    for inp in (first, next_step(first, r1, dev, bs + 1), random_inputs(bs, dev, seed=bs + 2)):
         out = impl.run(*[t.clone() for t in inp]); torch.cuda.synchronize()
-        res.append(judge(out, ref, inp))
+        res.append(judge(out, inp))
     return res
 
 
@@ -186,7 +196,7 @@ def main():
         res = check(bs, impl, ref_run, dev); ok = all(r[0] for r in res); allok &= ok
         t_ms = float("nan") if a.skip_timing or not hasattr(impl, "step_inplace") else timing(bs, impl, dev)
         bound = bs * H * (READ_B + WRITE_B) / REF_TBPS / 1e12 * 1e3
-        print(f"| {bs} | {bs * H} | {res[0][1]:.2f} / {res[1][1]:.2f} / {res[2][1]:.2f} | {'PASS' if ok else 'FAIL'} | {t_ms:.4f} | {bound:.4f} |", flush=True)
+        print(f"| {bs} | {bs * H} | {res[0][1]:.3f} / {res[1][1]:.3f} / {res[2][1]:.3f} | {'PASS' if ok else 'FAIL'} | {t_ms:.4f} | {bound:.4f} |", flush=True)
     assert allok, "correctness failed"
 
 

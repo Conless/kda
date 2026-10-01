@@ -22,18 +22,18 @@ SS, OFF = 33 * V * K, 12288                   # pool geometry in fp32 words: slo
 
 
 @tilelang.jit(pass_configs={"tl.disable_thread_storage_sync": True})
-def make_step_kernel(NS, HV, H, K, V, L, SS, R=4, SMS=148, NSTAGE=6, NSTAGEQ=4, NCG=2, NNW=2, scale=128 ** -0.5, MAXIT=256, PROF=False, GB16=True, DBG=0, TMAPG=False, FASTG=True, DFOLD=True, VECD=True, MMADOT=False, DNORM=False, WFOLD=True, WEXACT=False, GLB=0.0, **_ignored):
+def make_step_kernel(NS, HV, H, K, V, L, SS, R=4, SMS=148, NSTAGE=6, NSTAGEQ=4, NCG=2, NNW=2, scale=128 ** -0.5, MAXIT=256, PROF=False, GB16=True, DBG=0, TMAPG=False, FASTG=True, DFOLD=True, VECD=True, MMADOT=False, DNORM=False, WFOLD=True, WEXACT=False, GLB=0.0, DLO=True, **_ignored):
     """TileLang generator of the KDA decode-step kernel (see the module docstring).
       warp 0           : TMA ring (checkpoint tile on its own, shallower ring; the rest per stage)
       norm warps       : l2 norms, the per-channel gate (cumulative log-gate, this step's decay factor, the checkpoint's decay
                          pc), the fp16 mma B operand [kf qf] / kfmax with pc folded in, the per-program scalars; they also append
                          the new cumulative log-gate and decay factor
-      consumers        : the decayed buffered keys k_j * D_j (D_j = this step's factor times the later entries' factors, rounded to
-                         bf16 in place), int8 tile -> fp16 (exact) -> mma.m16n8k16 against [kf qf], the buffer and factor dots,
-                         one named barrier, contribution, output, global appends.
+      consumers        : the decayed buffered keys k_j * D_j (D_j = this step's factor times the later entries' factors) as a
+                         bf16 hi (in place) + bf16 lo (per-group tile) pair, int8 tile -> fp16 (exact) -> mma.m16n8k16 against
+                         [kf qf], the buffer and factor dots, one named barrier, contribution, output, global appends.
     Numerics: kf / qf are fp16 hi / lo after scaling by 1 / max|kf, qf|; the int8 -> fp16 conversion is exact; accumulation is fp32;
-    the gate uses __expf / __logf (FASTG); the decayed keys are bf16.  The other keyword switches are ablations (defaults are the
-    deployed configuration)."""
+    the gate uses __expf / __logf (FASTG); the decayed keys carry 16 significant bits (hi + lo).  The other keyword switches are
+    ablations (defaults are the deployed configuration)."""
     # FASTG: the gate is 4 transcendentals per key channel x 128 channels per program, all inside the norm warp,
     # which arrives normed[s] -- i.e. straight on every consumer's critical path.  TileLang lowers T.exp / T.log to
     # the ACCURATE expf / logf (range reduction + polynomial, ~15-20 instructions); __expf / __logf are one MUFU
@@ -62,6 +62,7 @@ def make_step_kernel(NS, HV, H, K, V, L, SS, R=4, SMS=148, NSTAGE=6, NSTAGEQ=4, 
     assert NSTAGEQ % NCG == 0
     SPGQ = NSTAGEQ // NCG                           # the int8 tile has its own (shallower) ring: it is dead after the checkpoint stream
     assert NSTAGE % NNW == 0, "every stage must be normed by ONE warp in fill order (program it -> warp it % NNW): otherwise a stage's fills alternate between warps, and a warp >= 2 fills ahead passes its mbarrier parity wait early (phase aliasing) -> stale data / deadlock"
+    assert not (DLO and MMADOT), "DLO is written for the CUDA-core buffer dots"
     NTW = NCG if TMAPG else 1                       # TMA warps: one per consumer group (TMAPG) or a single one
     assert NCG == 2 or not TMAPG, "per-group TMA warps are written out for NCG == 2"
     NPROD = 32 * (NTW + NNW)
@@ -99,6 +100,9 @@ def make_step_kernel(NS, HV, H, K, V, L, SS, R=4, SMS=148, NSTAGE=6, NSTAGEQ=4, 
             ax_s = T.alloc_shared((NSTAGE, K), BF16)           # this token's raw gate input a[n, hv, :]
             dtb_s = T.alloc_shared((NSTAGE, K), F32)           # dt_bias[hv, :] (TMA'd per program: no global latency in the norm warp)
             alog_s = T.alloc_shared((HV,), F32)
+            klo_s = T.alloc_shared((NCG, 2, L, K) if DLO else (1, 1, 1, 8), BF16)   # DLO: lo part of the decayed keys, per group and program parity
+            if DLO:
+                T.annotate_layout({klo_s: make_swizzled_layout(klo_s)})
             # ---- per-stage data produced by the norm warp ----
             bf_s = T.alloc_shared((NSTAGE, 8, K + 16), F16)   # B operand: rows 0/1 = hi(kf, qf)/kfmax, 2/3 = lo parts, 4..7 = 0
                                                              # (+16: row stride 288 B -> the 8 r0 rows of a fragment load land on different banks; K = 8-way conflicts)
@@ -403,6 +407,7 @@ def make_step_kernel(NS, HV, H, K, V, L, SS, R=4, SMS=148, NSTAGE=6, NSTAGEQ=4, 
                 knl = T.alloc_local((16 if VECD else 1,), F32)      # batched dot operands
                 qnl = T.alloc_local((16 if VECD else 1,), F32)
                 kbl = T.alloc_local((16 if VECD else 1,), BF16)
+                klol = T.alloc_local((16 if (VECD and DLO) else 1,), BF16)
                 afr2 = T.alloc_local((8 if MMADOT else 1,), BF16)   # ring-dot A fragment (ldmatrix.x4)
                 bfr2 = T.alloc_local((4 if MMADOT else 1,), BF16)   # ring-dot B fragment
                 dfrag = T.alloc_local((4 if MMADOT else 1,), F32)
@@ -440,6 +445,8 @@ def make_step_kernel(NS, HV, H, K, V, L, SS, R=4, SMS=148, NSTAGE=6, NSTAGEQ=4, 
                         # ---- per-entry decay D_j[c] = en[c] * prod_{i>j, i<h} e_i[c] (thread per column c = t), backward product ----
                         # (entries j >= h hold e_j = 1: the flush resets Gbuf to 1, so the product needs no predicate)
                         dcur = T.alloc_local((1,), F32)
+                        kdl = T.alloc_local((1,), F32)
+                        kdh = T.alloc_local((1,), BF16)
                         e_l = T.alloc_local((L if not DNORM else 1,), F32)
                         kb_l = T.alloc_local((L if (DFOLD and not DNORM) else 1,), F32)
                         if not DNORM:
@@ -451,8 +458,14 @@ def make_step_kernel(NS, HV, H, K, V, L, SS, R=4, SMS=148, NSTAGE=6, NSTAGEQ=4, 
                         dcur[0] = en_s[s, t]
                         for jj in T.unroll(0 if DNORM else L):
                             if DFOLD:                                      # k_j[c] * D_j[c], zeroed past hcnt so the dot needs no predicate
-                                Kb_s[s, L - 1 - jj, t] = T.cast(
-                                    kb_l[L - 1 - jj] * T.if_then_else(L - 1 - jj < h, dcur[0], 0.0), BF16)
+                                if DLO:
+                                    kdl[0] = kb_l[L - 1 - jj] * T.if_then_else(L - 1 - jj < h, dcur[0], 0.0)
+                                    kdh[0] = T.cast(kdl[0], BF16)
+                                    Kb_s[s, L - 1 - jj, t] = kdh[0]
+                                    klo_s[g, pb, L - 1 - jj, t] = T.cast(kdl[0] - T.cast(kdh[0], F32), BF16)
+                                else:
+                                    Kb_s[s, L - 1 - jj, t] = T.cast(
+                                        kb_l[L - 1 - jj] * T.if_then_else(L - 1 - jj < h, dcur[0], 0.0), BF16)
                             else:
                                 D_s[g, pb, L - 1 - jj, (t // 16) * 20 + t % 16] = T.cast(dcur[0], F16)
                             dcur[0] = dcur[0] * e_l[L - 1 - jj]
@@ -518,14 +531,18 @@ def make_step_kernel(NS, HV, H, K, V, L, SS, R=4, SMS=148, NSTAGE=6, NSTAGEQ=4, 
                             for v8 in T.unroll(2):
                                 for c1 in T.vectorized(8):
                                     kbl[v8 * 8 + c1] = Kb_s[s, jr, part * 16 + v8 * 8 + c1]
+                            if DLO:
+                                for v8 in T.unroll(2):
+                                    for c1 in T.vectorized(8):
+                                        klol[v8 * 8 + c1] = klo_s[g, pb, jr, part * 16 + v8 * 8 + c1]
                             for c1 in T.unroll(16):
-                                kb = T.cast(kbl[c1], F32)
+                                kb = T.cast(kbl[c1], F32) + (T.cast(klol[c1], F32) if DLO else 0.0)
                                 acc[2] += kb * knl[c1]
                                 acc[3] += kb * qnl[c1]
                         else:
                             for c1 in T.unroll(16):
                                 if DFOLD or (DBG & 1):                                     # decay already in Kb_s (or ablated away)
-                                    kb = T.cast(Kb_s[s, jr, part * 16 + c1], F32)
+                                    kb = T.cast(Kb_s[s, jr, part * 16 + c1], F32) + (T.cast(klo_s[g, pb, jr, part * 16 + c1], F32) if (DLO and DFOLD) else 0.0)
                                 else:
                                     kb = T.cast(Kb_s[s, jr, part * 16 + c1], F32) * T.if_then_else(jr < h, T.cast(D_s[g, pb, jr, part * 20 + c1], F32), 0.0)
                                 acc[2] += kb * kn_s[s, part * 20 + c1]

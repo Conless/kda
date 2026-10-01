@@ -2,9 +2,10 @@
 """Best-known LeapQuant flush kernel for Kimi Delta Attention (per-key-channel gate; see README.md).
 
 Warp-specialised TileLang kernel for sm_100 (B200): one persistent CTA per SM, a TMA producer warp and three
-128-thread consumer groups, products on tensor cores (mma.sync m16n8k16, bf16 hi/lo operands), the rebuilt state
-resident in shared memory as fp16 with the old rank-4 part carried algebraically in fp32, CholeskyQR2 with a relative
-pivot floor for the new Compensator Tokens, the due programs balanced across CTAs by a rank scan.
+128-thread consumer groups, products on tensor cores (mma.sync m16n8k16, bf16 hi/lo operands), the subspace iteration
+on an fp16 copy of the rebuilt state in shared memory with the old rank-4 part carried algebraically, CholeskyQR2 with
+a relative pivot floor for the new Compensator Tokens, the residual accumulated in fp32 from the checkpoint, the
+buffered updates and both rank-4 parts, the due programs balanced across CTAs by a rank scan.
 
   run(...)             functional form with the input order / outputs of definition.json (packs the inputs into a slot
                        pool, calls the kernel, returns the new checkpoint as fresh tensors) -- used for correctness
@@ -23,28 +24,21 @@ SS, OFF = 33 * V * K, 12288                   # pool geometry in fp32 words: slo
 
 
 @tilelang.jit(pass_configs={"tl.disable_thread_storage_sync": True})
-def make_flush_kernel(NS, HV, K, V, L, SS, R=4, ITERS=1, SMS=148, NCG=3, MAXIT=128, PROF=False, PAD=8, KDA=False, GB16=True, PROFIT=False, DROPLO=False, MMT="bf16", ABL="", PNMIN=1e-20, GRAM16=False, NSTAGE=0, NMAX=0, **_ignored):
-    """TileLang generator of the flush kernel (the KDA=True branches serve a per-channel-gate variant that this request does not use).
-
-    v2 keeps S in the mma fragments (128 fp32 registers per thread), which caps the CTA at two 4-warp programs in flight;
-    every phase of the flush is a dependent chain (mma -> smem -> barrier -> reduction), so the flush ran at ~22k cycles
-    per program per warpgroup with 8 warps resident.  v4 makes shared memory the home of the state: the rebuild produces
-    B = pn deq(S0) + buffer in two 64-column halves (64 accumulator registers) and stores it as fp16 with stmatrix; the
-    old rank-R part A = pn Q_old U_old^T is carried algebraically (see below); the residual E = B + A - Q U^T is written
-    back over B (ldmatrix / stmatrix), and the quantisation streams E row-wise (8 lanes per row, 16 columns per lane, one
-    16 B global store per lane -- no staging tile, no copy-out).  Registers drop to ~128 per thread, which fits NCG = 3
-    programs in flight (12 consumer warps); the stage (int8 tile, buffers, old factors) is released after the residual.
-    Every per-program smem object beyond the stage lives in two per-group buffers: St_s (V x (K + 8) fp16: B / E in the
-    columns < K, the fp16 Q tile of the iteration in the 8 padding columns) and UQn_s (fp32 Q for the CholeskyQR rows,
-    the fp16 P tile, then the new -U^T for the residual mma, then the |E| column partials).
-
-    Numerics: v2's fp16 St_s folds the fp16 rounding of S (2^-11 |S|) into the residual, which for a row captured by the
-    factors (hot rows: |E| << |S|) is a large error relative to E.  v4 keeps only B in fp16 and carries A exactly: the
-    iteration's products get the R x R corrections P += pn U_old (Q_old^T Q) and Q += pn Q_old (U_old^T P), with the
-    R x R matrices accumulated on the tensor cores alongside the products (every warp holds the full matrix, no
-    reduction), and the residual has both rank-R terms on the tensor cores in fp32.  The fp16 rounding is then 2^-11 |B|,
-    the size of the checkpoint residual itself; E is rounded to fp16 once more before the quantisation.
-    """
+def make_flush_kernel(NS, HV, K, V, L, SS, R=4, ITERS=1, SMS=148, NCG=3, MAXIT=128, PROF=False, PAD=8, KDA=False, GB16=True, PROFIT=False, DROPLO=False, MMT="bf16", ABL="", PNMIN=1e-20, GRAM16=False, NSTAGE=0, NMAX=0, KEXACT=True, **_ignored):
+    """TileLang generator of the flush kernel (KDA=True: the per-channel gate of this request; KDA=False is the scalar-gate
+    variant of requests/conless-leapquant-flush).  The rebuilt state B (state minus the old rank-4 part) lives in shared
+    memory as fp16 for the subspace iteration; the old rank-4 part is carried algebraically; the residual is accumulated
+    in fp32 from the stage (see KEXACT below) and quantised row-wise.  Keyword switches other than the shapes are
+    ablations (defaults are the deployed configuration)."""
+    # KEXACT (KDA): the residual E is accumulated from fp32 terms only -- the stage (codes, scales, decayed keys, values) is still resident,
+    #   so B is rebuilt in registers instead of read back from the fp16 St_s, and the old Compensator Tokens stay unscaled in UQ_s rows
+    #   0..R-1: E = (deq(S0) + Q_old U_old^T) pc + ring buffer - Q U^T with pc = exp(Pbuf) in fp32.  The subspace iteration still runs on
+    #   the fp16 St_s and an fp16 pc U_old^T copy in the zero padding rows R..2R-1 (only the new factors' quality depends on those).
+    #   E then goes to St_s as fp16 scaled by a power of two per (warp, half), so tiny heads do not fall into fp16 subnormals.
+    #   Without KEXACT (pc U_old^T rounded in place, E from the fp16 B, unscaled) the reconstruction error is 1-8 % above the fp32
+    #   reference's; with it 0.1-0.3 % (+20 % flush time: the second dequantisation).
+    KEX = bool(KDA and KEXACT)
+    assert not KEX or 2 * R <= 8
     # Gbuf holds fp16 factors; it is declared bf16 so the TMA target (Kbl_s, later the lo key tile) matches -- the bits are reinterpreted on read
     assert 1 <= R <= 4 and K == 128 and V == 128 and (not KDA or GB16) and PAD == 8
     F16 = "float16"
@@ -255,6 +249,9 @@ def make_flush_kernel(NS, HV, K, V, L, SS, R=4, ITERS=1, SMS=148, NCG=3, MAXIT=1
                 uh = T.alloc_local((4,), F16)
                 qh = T.alloc_local((4,), F16)
                 el = T.alloc_local((L,), F32)               # KDA: this column's per-entry decay factors
+                pcl = T.alloc_local((16 if KEX else 1,), F32)       # KEX: pc of this lane's residual columns
+                emx = T.alloc_local((1,), F32)                      # KEX: block max of |E|, then the power-of-two scale
+                esc = T.alloc_local((2,), F32)                      # KEX: per-half inverse E scale of this warp's rows
                 dcur = T.alloc_local((1,), F32)
                 eh = T.alloc_local((32,), F16)              # quantisation: 2 x 2 x 8 halfwords of E (alternating per row pass)
                 ph = T.alloc_local((8,), F16)               # fp16 pairs for stmatrix (vectorised cast -> one F2FP.PACK per pair)
@@ -307,7 +304,10 @@ def make_flush_kernel(NS, HV, K, V, L, SS, R=4, ITERS=1, SMS=148, NCG=3, MAXIT=1
                             Kbl_s[s, t // (K // 2), j, t % (K // 2)] = T.cast(kd - T.cast(khi, F32), BF16)
                             dcur[0] = dcur[0] * el[j]
                         for r in T.unroll(R):                     # pc U^T in place (fp16: 2^-11 of the rank-R term, measured irrelevant next to the int8 residual)
-                            UQ_s[s, t // 64, r, t % 64] = T.cast(T.cast(UQ_s[s, t // 64, r, t % 64], F32) * pcc, F16)
+                            if KEX:
+                                UQ_s[s, t // 64, R + r, t % 64] = T.cast(T.cast(UQ_s[s, t // 64, r, t % 64], F32) * pcc, F16)
+                            else:
+                                UQ_s[s, t // 64, r, t % 64] = T.cast(T.cast(UQ_s[s, t // 64, r, t % 64], F32) * pcc, F16)
                         T.sync_threads(bar, 128)
                         for i in T.unroll(4):
                             svr_l[i] = skv_s[s, K + w * 32 + (i // 2) * 16 + (i % 2) * 8 + lane // 4] * (1.0 / QMAX)
@@ -415,7 +415,7 @@ def make_flush_kernel(NS, HV, K, V, L, SS, R=4, ITERS=1, SMS=148, NCG=3, MAXIT=1
                             for hh in T.unroll(2):
                                 cc = w * 32 + mt * 16 + hh * 8 + r0
                                 for a in T.unroll(4):
-                                    uo[(mt * 2 + hh) * 4 + a] = T.if_then_else(a < R, T.cast(UQ_s[s, cc // 64, a, cc % 64], F32), 0.0)
+                                    uo[(mt * 2 + hh) * 4 + a] = T.if_then_else(a < R, T.cast(UQ_s[s, cc // 64, (R + a) if KEX else a, cc % 64], F32), 0.0)
                                 for i in T.unroll(2):
                                     c32[mt * 4 + hh * 2 + i] += pn * (uo[(mt * 2 + hh) * 4] * mm[i] + uo[(mt * 2 + hh) * 4 + 1] * mm[2 + i] + uo[(mt * 2 + hh) * 4 + 2] * mm[4 + i] + uo[(mt * 2 + hh) * 4 + 3] * mm[6 + i])
                         # ---- the fp16 P tile P16[c][r] (columns >= R zero: lanes q4 >= R/2 write zeros) via stmatrix.x2 (rows 0-7, rows 8-15 of each m-tile) ----
@@ -451,8 +451,8 @@ def make_flush_kernel(NS, HV, K, V, L, SS, R=4, ITERS=1, SMS=148, NCG=3, MAXIT=1
                                 c32[i] += c32[8 + i]
                             # ---- Q += pn Q_old M2 in the fragments, then the fp32 rows to PQ_s plane 0 for the CholeskyQR ----
                             for a in T.unroll(4):
-                                mm[a * 2] = T.shfl_sync(mc[0], a * 4 + q4)
-                                mm[a * 2 + 1] = T.shfl_sync(mc[1], a * 4 + q4)
+                                mm[a * 2] = T.shfl_sync(mc[0], ((R + a) if KEX else a) * 4 + q4)
+                                mm[a * 2 + 1] = T.shfl_sync(mc[1], ((R + a) if KEX else a) * 4 + q4)
                             for mt in T.unroll(2):
                                 for hh in T.unroll(2):
                                     vv = w * 32 + mt * 16 + hh * 8 + r0
@@ -550,10 +550,33 @@ def make_flush_kernel(NS, HV, K, V, L, SS, R=4, ITERS=1, SMS=148, NCG=3, MAXIT=1
                         T.ptx_ldmatrix(T.bool(True), 2, T.access_ptr(UQ_s[s, (K + w * 32 + mt * 16 + 8 * ((lane // 8) % 2)) // 64, lane % 8, (K + w * 32 + mt * 16 + 8 * ((lane // 8) % 2)) % 64], "r", extent=4), T.access_ptr(afrag2[mt * 4], "w", extent=4))
                         # A[m=v][k=r] = Q16[v][r] (row-major [m][k], k 0-7): x2 (non-trans) -> rows 0-7, rows 8-15
                         T.ptx_ldmatrix(T.bool(False), 2, T.access_ptr(St_s[g, w * 32 + mt * 16 + 8 * ((lane // 8) % 2) + lane % 8, K], "r", extent=4), T.access_ptr(afrag3[mt * 4], "w", extent=4))
+                    if KEX:                                        # the ring buffer's A fragments again (the rebuild's registers are long dead)
+                        for i in T.unroll(4):
+                            svr_l[i] = skv_s[s, K + w * 32 + (i // 2) * 16 + (i % 2) * 8 + lane // 4] * (1.0 / QMAX)
+                        for mt in T.unroll(2):
+                            T.ptx_ldmatrix(T.bool(True), 4, T.access_ptr(Ub_s[s, (w * 32 + mt * 16) // (V // 2), (lane % 8) + 8 * (lane // 16), (w * 32 + mt * 16) % (V // 2) + 8 * ((lane // 8) % 2)], "r", extent=8), T.access_ptr(afrag[mt * 8], "w", extent=8))
                     for h in T.unroll(2):
+                        if KEX:
+                            # KEX: B is rebuilt here in fp32 from the stage instead of read back from the fp16 St_s (its 2^-11 rounding cost +1 %
+                            # reconstruction error): E = (deq(S0) + Q_old U_old^T) pc + ring buffer - Q U^T, every term accumulated in fp32
+                            for ntl in T.unroll(8):
+                                for c1 in T.vectorized(2):
+                                    skl[ntl * 2 + c1] = skv_s[s, (h * 8 + ntl) * 8 + q4 * 2 + c1]
+                            for rr in T.unroll(4):
+                                v0 = w * 32 + (rr // 2) * 16 + (rr % 2) * 8 + r0
+                                for jcl in T.unroll(4):
+                                    jc = h * 4 + jcl
+                                    for nn in T.unroll(2):
+                                        qw[nn] = Qs[s, v0, jc * 4 + nn * 2 + q4 // 2]
+                                    for nn in T.unroll(2):
+                                        ntl = jcl * 2 + nn
+                                        pkw = qw[nn] ^ T.int32(-2139062144)
+                                        for c1 in T.unroll(2):
+                                            x = T.reinterpret(F32, T.call_extern(I32, "__byte_perm", pkw, T.int32(0x4B000000), T.int32(0x7650) + (q4 % 2) * 2 + c1)) - 8388736.0
+                                            cfrag[(ntl * 4 + rr) * 2 + c1] = x * svr_l[rr] * skl[ntl * 2 + c1]
                         # E = pn (B / pn + Q_old U_old^T) - Q U^T: the accumulator starts from B (scaled by 1 / pn on GDN, loaded with ldmatrix.x4 in the
                         # fragment layout), so both rank-R mma chains accumulate straight into it and there is no elementwise add afterwards
-                        for mt in T.unroll(2):
+                        for mt in (T.unroll(0) if KEX else T.unroll(2)):
                             for npl in T.unroll(4):
                                 T.ptx_ldmatrix(T.bool(False), 4, T.access_ptr(St_s[g, w * 32 + mt * 16 + 8 * ((lane // 8) % 2) + lane % 8, (h * 8 + npl * 2 + lane // 16) * 8], "r", extent=8), T.access_ptr(efrag[0], "w", extent=8))
                                 for jj in T.unroll(4):
@@ -571,12 +594,41 @@ def make_flush_kernel(NS, HV, K, V, L, SS, R=4, ITERS=1, SMS=148, NCG=3, MAXIT=1
                         if not KDA:
                             for i in T.unroll(64):
                                 cfrag[i] = cfrag[i] * pn
+                        if KEX:
+                            for nt in T.unroll(8):
+                                for c1 in T.unroll(2):
+                                    pcl[nt * 2 + c1] = pc_s[g, h * 64 + nt * 8 + 2 * q4 + c1]
+                                for mr in T.unroll(4):
+                                    for c1 in T.unroll(2):
+                                        cfrag[(nt * 4 + mr) * 2 + c1] = cfrag[(nt * 4 + mr) * 2 + c1] * pcl[nt * 2 + c1]
+                            for npl in T.unroll(4):                # + the ring buffer (bf16 hi + lo decayed keys, exact bf16 values)
+                                n0 = (h * 4 + npl) * 16
+                                bo = (npl % 2) * 16
+                                T.ptx_ldmatrix(T.bool(True), 4, T.access_ptr(Kb_s[s, n0 // (K // 2), (lane % 8) + 8 * ((lane // 8) % 2), n0 % (K // 2) + 8 * (lane // 16)], "r", extent=8), T.access_ptr(bfrag[bo], "w", extent=8))
+                                T.ptx_ldmatrix(T.bool(True), 4, T.access_ptr(Kbl_s[s, n0 // (K // 2), (lane % 8) + 8 * ((lane // 8) % 2), n0 % (K // 2) + 8 * (lane // 16)], "r", extent=8), T.access_ptr(bfrag[bo + 8], "w", extent=8))
+                                for mt in T.unroll(2):
+                                    for nn in T.unroll(2):
+                                        T.ptx_mma("float32", "m16n8k16", "row", "col", "bf16", "bf16", "fp32", afrag.data, mt * 8, bfrag.data, bo + nn * 4, cfrag.data, ((npl * 2 + nn) * 4 + mt * 2) * 2, T.bool(False))
+                                        T.ptx_mma("float32", "m16n8k16", "row", "col", "bf16", "bf16", "fp32", afrag.data, mt * 8, bfrag.data, bo + 8 + nn * 4, cfrag.data, ((npl * 2 + nn) * 4 + mt * 2) * 2, T.bool(False))
                         for npl in T.unroll(4):
                             n0 = (h * 4 + npl) * 16
                             T.ptx_ldmatrix(T.bool(True), 2, T.access_ptr(UQn_s[g, lane % 8, n0 + 8 * ((lane // 8) % 2)], "r", extent=4), T.access_ptr(bfr[(npl % 2) * 4], "w", extent=4))
                             for mt in T.unroll(2):
                                 for nn in T.unroll(2):
                                     T.ptx_mma("float32", "m16n8k8", "row", "col", "fp16", "fp16", "fp32", afrag3.data, mt * 4, bfr.data, (npl % 2) * 4 + nn * 2, cfrag.data, ((npl * 2 + nn) * 4 + mt * 2) * 2, T.bool(False))
+                        if KEX:
+                            # E goes to the fp16 St_s scaled by a power of two per (warp, half): the block maximum lands in [2^14, 2^15), so a tiny
+                            # head keeps 11 significant bits instead of sinking into fp16 subnormals (the column sums and the quantisation undo it exactly)
+                            emx[0] = 0.0
+                            for i in T.unroll(64):
+                                emx[0] = T.max(emx[0], T.abs(cfrag[i]))
+                            for i in T.unroll(5):
+                                emx[0] = T.max(emx[0], T.shfl_xor(emx[0], 1 << i))
+                            ebx = T.min(T.max(268 - ((T.reinterpret(I32, emx[0]) >> 23) & 255), 2), 252)
+                            esc[h] = T.reinterpret(F32, (254 - ebx) << 23)        # 2^-e: undoes the scaling
+                            emx[0] = T.reinterpret(F32, ebx << 23)                 # 2^e
+                            for i in T.unroll(64):
+                                cfrag[i] = cfrag[i] * emx[0]
                         for mt in T.unroll(2):
                             for npl in T.unroll(4):
                                 if "noste" not in ABL:
@@ -601,7 +653,10 @@ def make_flush_kernel(NS, HV, K, V, L, SS, R=4, ITERS=1, SMS=148, NCG=3, MAXIT=1
                                 T.ptx_mma("float32", "m16n8k16", "row", "col", "fp16", "fp16", "fp32", aone.data, 0, bhi.data, ks * 2, cfrag.data, ntl * 4, T.bool(False))
                         for ntl in T.unroll(8):
                             for c1 in T.unroll(2):
-                                colp[(h * 8 + ntl) * 2 + c1] = cfrag[ntl * 4 + c1]
+                                if KEX:
+                                    colp[(h * 8 + ntl) * 2 + c1] = cfrag[ntl * 4 + c1] * esc[h]
+                                else:
+                                    colp[(h * 8 + ntl) * 2 + c1] = cfrag[ntl * 4 + c1]
                     T.sync_threads(bar, 128)                  # the residual mma operands (UQn_s, UQ_s) are consumed: the partials may take the buffer, the stage is free
                     T.fence_proxy_async()
                     T.mbarrier_arrive(consumed[s])
@@ -624,7 +679,10 @@ def make_flush_kernel(NS, HV, K, V, L, SS, R=4, ITERS=1, SMS=148, NCG=3, MAXIT=1
                     #     row max over the 8 lanes, int8 codes packed in registers, one coalesced 16 B store per lane and row
                     for i in T.unroll(4):
                         for c1 in T.vectorized(4):
-                            rk[i * 4 + c1] = rsk[g, 6, (lane % 8) * 16 + i * 4 + c1]
+                            if KEX:                                        # lanes 0-3 hold columns of half 0, lanes 4-7 of half 1
+                                rk[i * 4 + c1] = rsk[g, 6, (lane % 8) * 16 + i * 4 + c1] * T.if_then_else(lane % 8 < 4, esc[0], esc[1])
+                            else:
+                                rk[i * 4 + c1] = rsk[g, 6, (lane % 8) * 16 + i * 4 + c1]
                     for i in T.unroll(8):
                         v0 = w * 32 + i * 4 + lane // 8
                         rmax[0] = 0.0
@@ -673,7 +731,6 @@ def make_flush_kernel(NS, HV, K, V, L, SS, R=4, ITERS=1, SMS=148, NCG=3, MAXIT=1
                     for i in T.unroll(10):
                         Wbuf[0, bid, i] = tacc[i]
     return flush
-
 
 
 class Pool:

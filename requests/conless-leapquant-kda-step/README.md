@@ -11,7 +11,7 @@ last 16 rank-1 updates are buffered in bf16 together with the per-channel decay 
 **decode step** requested here computes each token's output and its new rank-1 update from that representation,
 reading 32.6 KB per (sequence, head) and writing only the new update; it never materialises or writes back the state.
 This is the Kimi variant of `requests/conless-leapquant-step/`; the window-boundary flush is
-`requests/conless-leapquant-kda-flush/`. At batch 256 the baseline takes 0.061 ms per layer against 0.044 ms for its
+`requests/conless-leapquant-kda-flush/`. At batch 256 the baseline takes 0.068 ms per layer against 0.044 ms for its
 memory traffic.
 
 ## Contract and Baseline
@@ -34,46 +34,47 @@ window `L = 16`, `R = 4` Compensator Tokens, 32 key heads (no GQA).
   `u_new = beta · (v − S · kn)`, `o = S · qn + (kn · qn) · u_new`.
 - Outputs: `o` bf16 `[V]`; the new buffered update for entry `h`: `k_row = kn` bf16 `[K]`, `u_row = u_new` bf16 `[V]`,
   `g_row = en` fp16 `[K]`; `w_new` (= `w` with `w_new[h] = 1`) and `pcum_new` fp32 `[K]`.
-- Free: the order of operations, the precision of every intermediate, tensor cores or not, thread and memory layout —
-  anything that meets the criterion below. The state must not be materialised in global memory.
+- Free: the order of operations, tensor cores or not, thread and memory layout — anything that meets the criterion
+  below, which leaves no room for reduced-precision intermediates (every intermediate needs about fp32 precision; hi/lo
+  splits on the tensor cores are fine). The state must not be materialised in global memory.
 - Baseline (`baseline.py`): our TileLang kernel for sm_100, original work of this request's authors, first published
   here. One persistent CTA per SM, a TMA producer warp, three warps for the norms and the per-channel gate, two consumer
   groups of four warps; the int8 tile goes through the tensor cores (int8 → fp16 exactly, `mma.sync m16n8k16` against
-  an fp16 hi/lo split of the scaled, gate-decayed key and query); the decayed buffered keys are rounded to bf16 in
-  shared memory; the gate uses `__expf` / `__logf`.
+  an fp16 hi/lo split of the scaled, gate-decayed key and query); the decayed buffered keys are kept in shared memory
+  as a bf16 hi + lo pair; the gate uses `__expf` / `__logf`.
 - Hardware: NVIDIA B200.
 
 ## Correctness criterion
 
-`o` and `u_new` are sums whose terms can cancel strongly (in our random inputs an output 33× smaller than its terms is
-common), so the error is measured against the scale of the terms rather than the output itself — the usual
-forward-error bound. For every (sequence, head), with `M` the same expression evaluated on the absolute values of every
-term (state, checkpoint and dot products included):
+The outputs are compared element by element with the definition's formula evaluated in fp64. `o` and `u_new` are sums
+whose terms can cancel strongly (in our random inputs an output 33× smaller than its terms is common), so the
+allowance is measured against the scale of the terms rather than the output itself — the usual forward-error bound.
+With `M` the same expression evaluated on the absolute values of every term (state, checkpoint and dot products
+included):
 
-- `o`, `k_row`, `u_row`: `‖x − ref‖₂ ≤ 2.5e-3 · ‖M‖₂` and `|x − ref| ≤ 1.5e-2 · M` elementwise;
-- `g_row`: relative error ≤ 2e-3 (fp16 storage); `w_new`, `pcum_new`: `|x − ref| ≤ 1e-5 · (|ref| + 1)`;
+- `o`, `k_row`, `u_row`: `|x − exact| ≤ ½ bf16 step + 1e-5 · M` (half a step is the rounding of the output itself);
+  an element whose terms are all zero must come out zero;
+- `g_row`: `|x − exact| ≤ ½ fp16 step + 1e-5 · |exact|`; `w_new` exact; `pcum_new`: `|x − exact| ≤ 1e-5 · (|exact| + 1)`;
 - all outputs finite.
 
+1e-5 · M is 200× what fp32 arithmetic in any order costs (the fp32 reference: 5e-8 · M), so reordering, other
+reductions and hi/lo tensor-core splits pass, and any intermediate rounded to bf16, fp16 or TF32 fails.
 `benchmark.py` applies this to three inputs per batch size: a synthetic state with edge-case heads (empty buffer,
 all-zero state, full buffer, tiny and huge scales, a checkpoint decayed to nothing), the following step (the first
-step's update appended to the window), and unstructured in-domain random tensors. Measured worst errors over batch
-sizes 64, 256 and 512 (the `o` column is `‖x − ref‖₂ / ‖M‖₂`, bound 2.5e-3):
+step's update appended to the window), and unstructured in-domain random tensors. Worst error / tolerance over batch
+sizes 64, 256 and 512 (≤ 1 passes):
 
-| implementation | `o` | `u_row` | verdict |
-| --- | --- | --- | --- |
-| the baseline | 1.05e-3 | 1.51e-3 | pass |
-| the reference with the decayed buffered keys rounded to bf16 (as the baseline) | 1.05e-3 | 1.51e-3 | pass |
-| the state rounded to fp16 | 1.00e-3 | 1.30e-3 | pass |
-| the state rounded to bf16 | 1.49e-3 | 1.55e-3 | pass |
-| beta not rounded to bf16 | 1.81e-3 | 5.40e-3 | fail |
-| the state in fp8 (e4m3) | 1.62e-2 | 1.02e-2 | fail |
-| buffered updates not decayed | 0.47 | 0.41 | fail |
-| the checkpoint missing this step's gate | 0.53 | 0.24 | fail |
-| a scalar gate (channel mean) instead of per channel | 0.19 | 0.14 | fail |
-
-The bound admits bf16-class intermediates because the deployed kernel itself rounds the decayed buffered keys to bf16
-(its error equals that of the reference with exactly this rounding); the model's downstream accuracy with it is within
-the noise of the fp32 state.
+| implementation | structured / next step / random | verdict |
+| --- | --- | --- |
+| the fp32 reference | 0.033 / 0.040 / 0.028 | pass |
+| the baseline | 0.068 / 0.079 / 0.111 | pass |
+| the decayed buffered keys rounded to bf16 (our previous kernel) | 60 / 74 / 84 | fail |
+| the decoded checkpoint rounded to fp16 | 8.3 / 7.5 / 18.5 | fail |
+| the state rounded to fp16 | 7.9 / 8.6 / 17.0 | fail |
+| the state rounded to bf16 | 77 / 80 / 166 | fail |
+| state × key / query products in TF32 | 49 / 49 / 49 | fail |
+| the normalised key and query rounded to bf16 | 113 / 114 / 173 | fail |
+| beta not rounded to bf16 (the model carries it in bf16) | 377 / 376 / 326 | fail |
 
 ## Workloads
 
@@ -110,12 +111,12 @@ JIT or autotuning inside the call, since it runs every decode step inside a capt
 
 | batch_size | programs | worst error / tolerance (structured / next step / random) | correctness | latency (ms) | memory bound (ms) |
 | --- | --- | --- | --- | --- | --- |
-| 16 | 512 | 0.42 / 0.46 / 0.44 | PASS | 0.0102 | 0.0027 |
-| 32 | 1024 | 0.56 / 0.49 / 0.41 | PASS | 0.0137 | 0.0055 |
-| 64 | 2048 | 0.52 / 0.50 / 0.47 | PASS | 0.0205 | 0.0109 |
-| 128 | 4096 | 0.55 / 0.52 / 0.47 | PASS | 0.0347 | 0.0219 |
-| 256 | 8192 | 0.50 / 0.60 / 0.47 | PASS | 0.0612 | 0.0437 |
-| 512 | 16384 | 0.51 / 0.57 / 0.48 | PASS | 0.1137 | 0.0874 |
+| 16 | 512 | 0.030 / 0.032 / 0.076 | PASS | 0.0107 | 0.0027 |
+| 32 | 1024 | 0.023 / 0.028 / 0.067 | PASS | 0.0143 | 0.0055 |
+| 64 | 2048 | 0.037 / 0.041 / 0.081 | PASS | 0.0221 | 0.0109 |
+| 128 | 4096 | 0.045 / 0.057 / 0.083 | PASS | 0.0381 | 0.0219 |
+| 256 | 8192 | 0.041 / 0.079 / 0.080 | PASS | 0.0683 | 0.0437 |
+| 512 | 16384 | 0.068 / 0.070 / 0.111 | PASS | 0.1278 | 0.0874 |
 
 The memory bound is 34.1 KB per program (32.6 KB read, 1.5 KB written) at 6.54 TB/s, the bandwidth a large read-only
 stream reaches on this GPU; small batches cannot reach that bandwidth, so their bound is optimistic.
